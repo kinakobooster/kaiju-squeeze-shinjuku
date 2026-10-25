@@ -7,8 +7,8 @@ render_mode cull_disabled;
 // UV2 = (building id, roof flag).  COLOR.rgb = facade colour.
 
 // Hover highlight (chunk meshes): building ids to glow.
-uniform float hl_a = -1.0;
-uniform float hl_b = -1.0;
+uniform float hl_list[32];
+uniform int hl_count = 0;
 uniform float hl_strength = 0.0;
 
 // Squeeze deformation (only the detached, finely tessellated building uses these).
@@ -27,6 +27,7 @@ varying float v_roof;
 varying vec2 v_wall;
 varying float v_band;
 varying vec3 v_world;
+varying float v_hl;
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -58,7 +59,17 @@ void vertex() {
 		VERTEX.y += squeeze * 0.28 * bheight * smoothstep(grip_y - 0.15, 1.0, hy);
 	}
 	// the targeted building shivers in fear
-	float hlv = (abs(UV2.x - hl_a) < 0.5 || abs(UV2.x - hl_b) < 0.5) ? hl_strength : 0.0;
+	float hit = 0.0;
+	for (int i = 0; i < 32; i++) {
+		if (i >= hl_count) {
+			break;
+		}
+		if (abs(UV2.x - hl_list[i]) < 0.5) {
+			hit = 1.0;
+		}
+	}
+	v_hl = hit;
+	float hlv = hit * hl_strength;
 	if (hlv > 0.0) {
 		float up = clamp(VERTEX.y * 0.04, 0.0, 1.0);
 		VERTEX.xz += vec2(sin(TIME * 53.0 + VERTEX.y * 0.3), cos(TIME * 61.0 + VERTEX.y * 0.27)) * 0.6 * up * hlv;
@@ -87,7 +98,7 @@ void fragment() {
 	} else {
 		col = mix(base, vec3(1.0), 0.35);
 	}
-	float hl = (abs(v_seed - hl_a) < 0.5 || abs(v_seed - hl_b) < 0.5) ? 1.0 : 0.0;
+	float hl = v_hl;
 	emit += vec3(1.0, 0.1, 0.15) * hl * hl_strength * 0.8;
 	col = mix(col, vec3(1.0, 0.15, 0.2), hl * hl_strength * 0.7);
 	float j = clamp(juice * v_band, 0.0, 0.85);

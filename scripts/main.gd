@@ -14,10 +14,11 @@ enum State { MOVE, AIM, GRIP, PINCH }
 const EYE_START := 30.0
 const EYE_MAX := 175.0
 const CRUSH_RATIO := 1.6  # can crush buildings up to eye height * this
-const WALK_K := 55.0  # forward push per unit of thumbs-up pumping
+const WALK_K := 130.0  # forward push per unit of thumbs-up pumping (long strides)
 const TURN_K := 1.6  # turn rate per unit of one-thumb wiggling
 const CAM_PITCH := -15.0
-const MAX_SPEED := 110.0
+const MAX_SPEED := 160.0
+const CHARGE_TIME := 2.5  # seconds for an open palm to grow to full size
 const GRIP_OPEN := 0.7  # openness below this starts a grip
 const FIST_OPEN := 0.12  # openness at which the building is fully crushed
 const RELEASE_OPEN := 0.8
@@ -100,16 +101,13 @@ var ready_to_play := false
 var clock := 0.0
 
 # active squeeze
-var active_id := -1
-var active_node: MeshInstance3D
+var active_ids: Array[int] = []  # the buildings being squeezed together
+var active_nodes := {}  # id -> deformable MeshInstance3D
 var closure := 0.0
 var grip_start := 0.0
 var grip_y := 0.5
 var size_pitch := 1.0
 var two_hand := false
-var press_target := -1
-var press_d0 := 0.0
-var prev_press := 0.0
 var relaxing := {}  # id -> {node, cur, target, jig}
 var juice_fx: CPUParticles3D
 var debris_fx: CPUParticles3D
@@ -304,7 +302,7 @@ func _setup_ui() -> void:
 	help.anchor_bottom = 1.0
 	help.offset_top = -150
 	help.text = ("両手でいいねして上下に振る = 前進 ／ 片手のいいねを揺らす = その手の方へ旋回\n"
-			+ "パーで止める = 手の影の下のビルが赤く震える ／ 素早くグー = サクッ！ ／ ゆっくりグー = グジュウ〜 ／ 二本指でつまむ = プチッ！\n"
+			+ "パーで止める = 手のひらに魔眼が開き、手がだんだん大きくなる ／ 手の下のビルが全部赤く震える ／ 素早くグー = サクッ！ ／ ゆっくりグー = グジュウ〜 ／ 二本指でつまむ = プチッ！\n"
 			+ "画面に向かって叩く = 手と腕の影の下をまとめてドドド！ ／ 両手で握る or パーで挟む = 両手スクイーズ ／ 潰すほど大きくなる\n"
 			+ "[マウス] 左長押し=握る  Space=素早く握る  Q=つまむ  右=叩く  T=いいね  B=口を開ける  F=笑顔  WASD=移動  H=ヘルプ")
 	banner = _label(top, 54, Vector2.ZERO)
@@ -424,7 +422,7 @@ func _process(dt: float) -> void:
 		hud.text += "  ／  宇宙人まで %d:%02d" % [int(boss_timer) / 60, int(boss_timer) % 60]
 	silhouette.claw_scale = 3.0 if active_item == "claw" else 1.0
 	var hm: ShaderMaterial = hand_rect.material
-	hm.set_shader_parameter("grip_glow", closure if active_id >= 0 else 0.0)
+	hm.set_shader_parameter("grip_glow", closure if not active_ids.is_empty() else 0.0)
 	ui.queue_redraw()
 
 
@@ -495,28 +493,25 @@ func _is_slap(h: HandInput.Hand, c: Dictionary) -> bool:
 
 
 func _update_hands(dt: float) -> void:
+	var lit: Array[int] = []
 	for side in [-1, 1]:
 		var c: Dictionary = ctl[side]
 		var h: HandInput.Hand = input.hands.get(side)
 		c["cool"] = maxf(c["cool"] - dt, 0.0)
 		if h == null:
-			c["state"] = State.MOVE
-			c["target"] = -1
-			c["still"] = 0.0
+			_reset_hand(c)
 			continue
-		# what the hand's shadow is on: this is what the hand acts on
+		# where the hand's shadow is: slaps and items work there
 		var tg := _hand_target(h)
 		c["world"] = tg["world"]
 		if h.like or game_state == "title":  # before the start, hands only walk
-			c["state"] = State.MOVE
-			c["target"] = -1
-			c["still"] = 0.0
+			_reset_hand(c)
+			h.charge = move_toward(h.charge, 0.0, dt * 2.0)
 			continue
 		var spd := h.vel.length()
 		if game_state != "play" and boss != null and _palm_on_boss(h.palm):
-			c["state"] = State.MOVE
-			c["target"] = -1
-			c["still"] = 0.0
+			_reset_hand(c)
+			h.charge = move_toward(h.charge, 0.0, dt * 2.0)
 			if not boss.stunned and _is_slap(h, c):
 				c["cool"] = 0.35
 				_hit_boss(h.palm)
@@ -530,70 +525,79 @@ func _update_hands(dt: float) -> void:
 			continue
 		match c["state"]:
 			State.MOVE:
+				h.charge = move_toward(h.charge, 0.0, dt * 2.0)
 				c["still"] = c["still"] + dt if (h.openness > 0.75 and spd < 0.9) else 0.0
 				if c["still"] > 0.18:
-					c["state"] = State.AIM
+					c["state"] = State.AIM  # the eye in the palm opens
 					c["pinch0"] = h.pinch
+					sfx.play(sfx.freeze, 0.7, -12.0)
 			State.AIM:
-				var t: int = tg["id"]
-				if t != c["target"] and t >= 0:
-					sfx.play(sfx.select, 1.0 if _crushable(t) else 0.6, -14.0)
-				c["target"] = t
+				# the open hand slowly grows; every building it covers shivers in fear
+				h.charge = minf(h.charge + dt / CHARGE_TIME, 1.0)
+				var ts := _cover_targets(h)
+				if ts.size() > c["targets"].size():
+					sfx.play(sfx.select, 0.8 + 0.04 * ts.size(), -16.0)
+				c["targets"] = ts
+				c["target"] = ts[0] if not ts.is_empty() else -1
 				c["hit"] = tg["point"]
+				lit.append_array(ts)
 				c["pinch0"] = maxf(c.get("pinch0", 0.0), h.pinch)
 				if spd > 1.7:
-					c["state"] = State.MOVE
-					c["still"] = 0.0
+					_reset_hand(c)
 				elif h.others_open > 0.8 and c["pinch0"] > PINCH_OPEN and h.pinch < PINCH_OPEN - 0.15:
 					# thumb and index closing while the other fingers stay up = pinch
-					if t >= 0 and _crushable(t):
+					if ts.is_empty():
+						_reset_hand(c)
+					else:
 						c["state"] = State.PINCH
-						_begin_squeeze(t, c["hit"])
-					else:
-						if t >= 0 and c["cool"] <= 0.0:
-							_too_hard(t)
-							c["cool"] = 0.6
-						c["state"] = State.MOVE
+						_grab(ts, c["hit"])
 				elif h.openness < GRIP_OPEN and h.others_open < 0.6:
-					if t >= 0 and _crushable(t):
-						c["state"] = State.GRIP
-						_begin_squeeze(t, c["hit"])
+					if ts.is_empty():
+						_reset_hand(c)
 					else:
-						if t >= 0 and c["cool"] <= 0.0:
-							_too_hard(t)
-							c["cool"] = 0.6
-						c["state"] = State.MOVE
+						c["state"] = State.GRIP
+						_grab(ts, c["hit"])
 			State.GRIP:
 				if h.openness > RELEASE_OPEN:
-					c["state"] = State.MOVE
-					c["still"] = 0.0
-					c["target"] = -1
+					_reset_hand(c)
 			State.PINCH:
 				if h.pinch > PINCH_OPEN + 0.1 or h.others_open < 0.3:
-					c["state"] = State.MOVE
-					c["still"] = 0.0
-					c["target"] = -1
-	# a second fist close to the one already squeezing joins in (squeezing between both hands)
-	if active_id >= 0:
-		for side in [-1, 1]:
-			var c: Dictionary = ctl[side]
-			var other: Dictionary = ctl[-side]
-			if c["state"] == State.GRIP and c["target"] != active_id and other["state"] == State.GRIP \
-					and other["target"] == active_id:
-				var a: HandInput.Hand = input.hands[side]
-				var b: HandInput.Hand = input.hands[-side]
-				if a.palm.distance_to(b.palm) < get_viewport().get_visible_rect().size.y * 0.55:
-					c["target"] = active_id
-	var hl := []
-	for side in [-1, 1]:
-		var c: Dictionary = ctl[side]
-		if c["state"] == State.AIM and c["target"] >= 0 and _crushable(c["target"]):
-			hl.append(c["target"])
-	if press_target >= 0:
-		hl.append(press_target)
-	hl.append(-1)
-	hl.append(-1)
-	city.set_hover(hl[0], hl[1], 0.6 + 0.4 * sin(Time.get_ticks_msec() * 0.012))
+					_reset_hand(c)
+	city.set_hover(lit, 0.6 + 0.4 * sin(Time.get_ticks_msec() * 0.012))
+
+
+func _reset_hand(c: Dictionary) -> void:
+	c["state"] = State.MOVE
+	c["target"] = -1
+	c["targets"] = [] as Array[int]
+	c["still"] = 0.0
+
+
+## Every crushable building under the (growing) hand on screen, nearest the palm first.
+## The hand's reach grows with it.
+func _cover_targets(h: HandInput.Hand) -> Array[int]:
+	var vp := get_viewport().get_visible_rect().size
+	var disp := h.size * HandSilhouette.draw_scale(h, vp.y)
+	var up := (h.pts[9] - h.pts[0]).normalized()
+	var center := h.palm + up * disp * 0.35
+	var radius := disp * 1.15
+	var me := Vector2(player.position.x, player.position.z)
+	var found := []
+	for id in city.buildings_in_capsule(me, me, reach(1.0 + 1.5 * h.charge)):
+		if not _crushable(id):
+			continue
+		var b: Dictionary = city.buildings[id]
+		var w := Vector3(b["center"].x, city.effective_height(id) * 0.5, b["center"].y)
+		if cam.is_position_behind(w):
+			continue
+		var d := cam.unproject_position(w).distance_to(center)
+		if d < radius:
+			found.append([d, id])
+	found.sort_custom(func(x, y): return x[0] < y[0])
+	var out: Array[int] = []
+	for f in found.slice(0, 30):
+		out.append(f[1])
+	return out
 
 
 func _update_movement(dt: float) -> void:
@@ -639,7 +643,7 @@ func _update_movement(dt: float) -> void:
 	var top_speed := MAX_SPEED * k * (2.5 if midas else 1.0)
 	speed = clampf(speed + fwd_acc * dt, -top_speed * 0.5, top_speed)
 	yaw_vel += yaw_acc * dt
-	speed *= exp(-1.6 * dt)
+	speed *= exp(-1.1 * dt)
 	yaw_vel *= exp(-4.0 * dt)
 	player.rotation.y += yaw_vel * dt
 	var forward := -player.global_basis.z
@@ -665,74 +669,71 @@ func _size_pitch(b: Dictionary) -> float:
 	return clampf(1.25 - 0.22 * size_factor, 0.55, 1.2)
 
 
-func _begin_squeeze(id: int, hit: Vector3) -> void:
-	if id == active_id:
+## Start squeezing a group, or add to the group already in a fist.
+func _grab(ids: Array[int], hit: Vector3) -> void:
+	if active_ids.is_empty():
+		_begin_squeeze(ids, hit)
 		return
+	var extra: Array[int] = []
+	for id in ids:
+		if not active_ids.has(id):
+			extra.append(id)
+	var nodes := city.detach_many(extra)
+	for id in extra:
+		relaxing.erase(id)
+		active_ids.append(id)
+		active_nodes[id] = nodes[id]
+
+
+func _begin_squeeze(ids: Array[int], hit: Vector3) -> void:
 	_end_squeeze()
-	var b: Dictionary = city.buildings[id]
-	active_id = id
-	active_node = city.detach(id)
-	relaxing.erase(id)
+	active_ids.assign(ids.slice(0, 30))
+	active_nodes = city.detach_many(active_ids)
 	closure = 0.0
 	grip_start = clock
-	grip_y = clampf(hit.y / b["h"], 0.2, 0.8)
-	size_pitch = _size_pitch(b)
-	var m: ShaderMaterial = active_node.material_override
-	m.set_shader_parameter("grip_y", grip_y)
-	sfx.frozen = b.get("frozen", false)
+	var biggest := active_ids[0]
+	for id in active_ids:
+		relaxing.erase(id)
+		var b: Dictionary = city.buildings[id]
+		var gy := clampf(hit.y / b["h"], 0.2, 0.8) if id == active_ids[0] else 0.5
+		active_nodes[id].material_override.set_shader_parameter("grip_y", gy)
+		if b["h"] * b["area"] > city.buildings[biggest]["h"] * city.buildings[biggest]["area"]:
+			biggest = id
+	grip_y = clampf(hit.y / city.buildings[active_ids[0]]["h"], 0.2, 0.8)
+	size_pitch = _size_pitch(city.buildings[biggest])
+	sfx.frozen = city.buildings[active_ids[0]].get("frozen", false)
 
 
 func _end_squeeze() -> void:
-	if active_id < 0:
-		return
-	var b: Dictionary = city.buildings[active_id]
-	b["damage"] = maxf(b["damage"], closure)
-	relaxing[active_id] = {"node": active_node, "cur": closure, "target": b["damage"] * 0.4, "jig": 1.0}
-	active_id = -1
-	active_node = null
+	for id in active_ids:
+		var b: Dictionary = city.buildings[id]
+		if not b["alive"]:
+			continue
+		b["damage"] = maxf(b["damage"], closure)
+		relaxing[id] = {"node": active_nodes[id], "cur": closure, "target": b["damage"] * 0.4, "jig": 1.0}
+	active_ids.clear()
+	active_nodes.clear()
 	closure = 0.0
 	juice_fx.emitting = false
 
 
 func _update_squeeze(dt: float) -> void:
-	# two open palms pressing together around a building
-	var press := 0.0
-	var ha: HandInput.Hand = input.hands.get(-1)
-	var hb: HandInput.Hand = input.hands.get(1)
-	var both_aim: bool = ha != null and hb != null and ctl[-1]["state"] == State.AIM and ctl[1]["state"] == State.AIM
-	if both_aim:
-		var mid := (ha.palm + hb.palm) * 0.5
-		var d := ha.palm.distance_to(hb.palm)
-		var hit := _ray(mid)
-		var t: int = hit.get("id", -1)
-		if t != press_target or t < 0 or not _crushable(t):
-			press_target = t if t >= 0 and _crushable(t) else -1
-			press_d0 = d
-		else:
-			press_d0 = maxf(press_d0, d)
-			press = clampf((press_d0 - d) / maxf(press_d0 * 0.55, 1.0), 0.0, 1.0)
-			if press > 0.08 and active_id != t:
-				_begin_squeeze(t, hit["point"])
-	else:
-		press_target = -1
-
-	if active_id < 0:
+	if active_ids.is_empty():
 		sfx.update_squeeze(dt, false, 0.0, 0.0, 1.0)
-		prev_press = 0.0
 		return
-	# the building is crushed exactly as far as the fist is closed
+	# the buildings are crushed exactly as far as the fist (or pinch) is closed
 	var now_closure := 0.0
 	var closing := 0.0
 	var grippers := 0
 	var pinching := false
 	for side in [-1, 1]:
 		var c: Dictionary = ctl[side]
-		if c["state"] == State.GRIP and c["target"] == active_id:
+		if c["state"] == State.GRIP:
 			var h: HandInput.Hand = input.hands[side]
 			now_closure = maxf(now_closure, clampf((GRIP_OPEN - h.openness) / (GRIP_OPEN - FIST_OPEN), 0.0, 1.0))
 			closing = maxf(closing, h.close_speed / (GRIP_OPEN - FIST_OPEN))
 			grippers += 1
-		elif c["state"] == State.PINCH and c["target"] == active_id:
+		elif c["state"] == State.PINCH:
 			var h: HandInput.Hand = input.hands[side]
 			var pc := clampf((PINCH_OPEN - h.pinch) / (PINCH_OPEN - PINCH_SHUT), 0.0, 1.0)
 			closing = maxf(closing, (pc - c.get("pinch_prev", pc)) / maxf(dt, 1e-3))
@@ -740,28 +741,24 @@ func _update_squeeze(dt: float) -> void:
 			now_closure = maxf(now_closure, pc)
 			grippers += 1
 			pinching = true
-	var pressing := press_target == active_id and press > 0.0
-	if pressing:
-		closing = maxf(closing, (press - prev_press) / maxf(dt, 1e-3))
-		now_closure = maxf(now_closure, press)
-	prev_press = press
-	if grippers == 0 and not pressing:
+	if grippers == 0:
 		_end_squeeze()
 		sfx.update_squeeze(dt, false, 0.0, 0.0, 1.0)
 		return
-	two_hand = grippers == 2 or pressing or pinching  # a pinch flattens it between two fingers
+	two_hand = grippers == 2 or pinching  # squeezed between two hands, or two fingers
 	closing = maxf(closing, 0.0)
 	closure = now_closure
-	var m: ShaderMaterial = active_node.material_override
-	m.set_shader_parameter("squeeze", closure * 0.95)
-	m.set_shader_parameter("two_hand", 1.0 if two_hand else 0.0)
-	m.set_shader_parameter("juice", closure)
-	m.set_shader_parameter("jiggle", clampf(closing * 0.08, 0.0, 0.3))
 	var right := cam.global_basis.x
-	m.set_shader_parameter("sq_dir", Vector2(right.x, right.z).normalized())
+	for id in active_ids:
+		var m: ShaderMaterial = active_nodes[id].material_override
+		m.set_shader_parameter("squeeze", closure * 0.95)
+		m.set_shader_parameter("two_hand", 1.0 if two_hand else 0.0)
+		m.set_shader_parameter("juice", closure)
+		m.set_shader_parameter("jiggle", clampf(closing * 0.08, 0.0, 0.3))
+		m.set_shader_parameter("sq_dir", Vector2(right.x, right.z).normalized())
 	shake = maxf(shake, 0.05 + 0.2 * closure + 0.1 * clampf(closing, 0.0, 2.0))
 	sfx.update_squeeze(dt, true, closing, closure, size_pitch)
-	var b: Dictionary = city.buildings[active_id]
+	var b: Dictionary = city.buildings[active_ids[0]]
 	juice_fx.global_position = Vector3(b["center"].x, b["h"] * grip_y, b["center"].y)
 	juice_fx.emission_sphere_radius = b["radius"] * 0.5
 	juice_fx.color = b["juice"]
@@ -771,8 +768,80 @@ func _update_squeeze(dt: float) -> void:
 	juice_fx.emitting = closing > 0.3 and closure > 0.2
 	if closure >= 0.97:
 		var elapsed := clock - grip_start
-		var style := "snap" if elapsed < SNAP_TIME else "squish"
-		_crush(active_id, juice_fx.global_position, "pinch" if pinching else style)
+		var style := "pinch" if pinching else ("snap" if elapsed < SNAP_TIME else "squish")
+		_crush_group(active_ids.duplicate(), style)
+
+
+## Sound, shake and banner text for a crush style.
+func _style_fx(style: String, pitch: float) -> String:
+	match style:
+		"ice":
+			sfx.play_ice_burst()
+			shake = 0.6
+			return "シャリシャリ〜ッ!!"
+		"snap":
+			sfx.play_snap(pitch)
+			shake = 0.8
+			return "サクッ!!"
+		"squish":
+			sfx.play_squish(pitch)
+			shake = 1.2
+			return "グジュウゥ〜〜ッ!!"
+		"pinch":
+			sfx.play_snap(pitch * 1.3)
+			shake = 0.4
+			return "プチッ!!"
+	sfx.play_slap(pitch)
+	shake = 1.0
+	return "バチーン!!"
+
+
+## Everything in the fist goes at once.
+func _crush_group(ids: Array[int], style: String) -> void:
+	if ids.size() == 1:
+		_crush(ids[0], juice_fx.global_position, style)
+		return
+	if city.buildings[ids[0]].get("frozen", false):
+		style = "ice"
+	banner.text = _style_fx(style, size_pitch) + "\n%d棟まとめて！" % ids.size()
+	for i in mini(ids.size(), 6):  # a rumble behind the main crunch
+		get_tree().create_timer(0.06 * (i + 1)).timeout.connect(func():
+			sfx.play(sfx.pops.pick_random(), randf_range(0.7, 1.3), -6.0)
+			sfx.play(sfx.thud, randf_range(1.0, 1.4), -10.0))
+	var before := int(crush_limit())
+	for i in ids.size():
+		var b: Dictionary = city.buildings[ids[i]]
+		relaxing.erase(ids[i])
+		_spawn_beads(b)
+		eye_target = minf(eye_target + (0.6 + b["h"] * 0.045) * 0.5, EYE_MAX)
+		if i < 6:
+			for fx in [juice_fx, debris_fx]:
+				var one: CPUParticles3D = fx.duplicate()
+				add_child(one)
+				one.global_position = Vector3(b["center"].x, b["h"] * 0.5, b["center"].y)
+				one.emission_sphere_radius = b["radius"] * 0.7
+				one.one_shot = true
+				one.explosiveness = 1.0 if style != "squish" else 0.7
+				one.initial_velocity_max = 110.0 if style != "squish" else 70.0
+				one.color = b["juice"] if fx == juice_fx else b["color"]
+				var psz := clampf(b["radius"] / 45.0, 0.08, 0.7)
+				one.scale_amount_min = 0.5 * psz
+				one.scale_amount_max = 1.4 * psz
+				one.emitting = true
+				get_tree().create_timer(3.0).timeout.connect(one.queue_free)
+	active_ids.clear()
+	active_nodes.clear()
+	closure = 0.0
+	juice_fx.emitting = false
+	city.destroy_many(ids)
+	score_count += ids.size()
+	if int(eye_target * CRUSH_RATIO) / 25 > before / 25:
+		hint.text = "おおきくなった！ %dmのビルまで潰せる！" % int(eye_target * CRUSH_RATIO)
+		hint_time = 2.5
+	banner_time = 3.0
+	for side in [-1, 1]:
+		ctl[side]["target"] = -1
+		ctl[side]["targets"] = [] as Array[int]
 
 
 ## style: "snap" (fast fist), "squish" (slow fist), "pinch" (two fingers) or "slap".
@@ -781,27 +850,7 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 	var pitch := _size_pitch(b)
 	if b.get("frozen", false) and style != "slap":
 		style = "ice"
-	match style:
-		"ice":
-			sfx.play_ice_burst()
-			shake = 0.6
-			banner.text = "シャリシャリ〜ッ!!"
-		"snap":
-			sfx.play_snap(pitch)
-			shake = 0.8
-			banner.text = "サクッ!!"
-		"squish":
-			sfx.play_squish(pitch)
-			shake = 1.2
-			banner.text = "グジュウゥ〜〜ッ!!"
-		"pinch":
-			sfx.play_snap(pitch * 1.3)
-			shake = 0.4
-			banner.text = "プチッ!!"
-		_:
-			sfx.play_slap(pitch)
-			shake = 1.0
-			banner.text = "バチーン!!"
+	banner.text = _style_fx(style, pitch)
 	var center := Vector3(b["center"].x, clampf(at.y, 2.0, b["h"]), b["center"].y)
 	for fx in [juice_fx, debris_fx]:
 		var one: CPUParticles3D = fx.duplicate()
@@ -819,11 +868,12 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 		one.scale_amount_max = 1.4 * sz
 		one.emitting = true
 		get_tree().create_timer(3.0).timeout.connect(one.queue_free)
-	if id == active_id:
-		juice_fx.emitting = false
-		active_id = -1
-		active_node = null
-		closure = 0.0
+	if active_ids.has(id):
+		active_ids.erase(id)
+		active_nodes.erase(id)
+		if active_ids.is_empty():
+			juice_fx.emitting = false
+			closure = 0.0
 	relaxing.erase(id)
 	_spawn_beads(b)
 	city.destroy(id)
@@ -944,11 +994,18 @@ func _slap(h: HandInput.Hand, c: Dictionary, tg: Dictionary) -> void:
 	_crush_many(ids, a)
 
 
+func _any_active(ids: Array[int]) -> bool:
+	for id in ids:
+		if active_ids.has(id):
+			return true
+	return false
+
+
 func _crush_many(ids: Array[int], at: Vector2) -> void:
 	ids.sort_custom(func(x, y): return city.buildings[x]["center"].distance_to(at) < city.buildings[y]["center"].distance_to(at))
 	if ids.size() > 30:
 		ids = ids.slice(0, 30)
-	if ids.has(active_id):
+	if _any_active(ids):
 		_end_squeeze()
 	var grown := 0.0
 	for i in ids.size():
@@ -994,8 +1051,11 @@ func _update_shadows_and_beads(dt: float) -> void:
 	var fwd := -player.global_basis.z
 	rs.global_shader_parameter_set(&"kaiju_body", Vector4(player.position.x - fwd.x * eye * 0.35,
 			player.position.z - fwd.z * eye * 0.35, 2.5 if active_item == "claw" else 1.0, eye))
+	var grow := 0.0
+	for h in input.hands.values():
+		grow = maxf(grow, h.charge)
 	rs.global_shader_parameter_set(&"kaiju_reach",
-			Vector4(player.position.x, player.position.z, reach(), look_down))
+			Vector4(player.position.x, player.position.z, reach(1.0 + 1.5 * grow), look_down))
 	for side in [-1, 1]:
 		var h: HandInput.Hand = input.hands.get(side)
 		var param := &"kaiju_hand_r" if side > 0 else &"kaiju_hand_l"
@@ -1003,7 +1063,7 @@ func _update_shadows_and_beads(dt: float) -> void:
 			rs.global_shader_parameter_set(param, Vector4(0, 0, 0, 1))
 			continue
 		var w: Vector3 = ctl[side].get("world", Vector3.ZERO)
-		var hs := hand_size()
+		var hs := hand_size() * (1.0 + 1.5 * h.charge)
 		rs.global_shader_parameter_set(param, Vector4(w.x, w.z, hs, 0.15 if h.like else h.openness))
 		# stroking a bead pile
 		if h.vel.length() < 0.35:
@@ -1305,7 +1365,7 @@ func _stomp(a: Vector2, b: Vector2) -> void:
 	for id in ids:
 		_spawn_beads(city.buildings[id])
 		eye_target = minf(eye_target + (0.3 + city.buildings[id]["h"] * 0.02) * 0.5, EYE_MAX)
-		if id == active_id:
+		if active_ids.has(id):
 			_end_squeeze()
 	city.destroy_many(ids)
 	score_count += ids.size()
@@ -1317,7 +1377,7 @@ func _stomp(a: Vector2, b: Vector2) -> void:
 
 
 func _gild(ids: Array[int]) -> void:
-	if ids.has(active_id):
+	if _any_active(ids):
 		_end_squeeze()
 	for i in ids.size():
 		var b: Dictionary = city.buildings[ids[i]]
@@ -1501,7 +1561,7 @@ func _update_beam(dt: float) -> void:
 
 func _star_burst(id: int) -> void:
 	var b: Dictionary = city.buildings[id]
-	if id == active_id:
+	if active_ids.has(id):
 		_end_squeeze()
 	var stars_fx := CPUParticles3D.new()
 	var mesh := _star_mesh()
@@ -1588,43 +1648,21 @@ func _draw_ui() -> void:
 		var c: Dictionary = ctl[side]
 		if c["state"] != State.AIM:
 			continue
-		var r := h.size * HandSilhouette.draw_scale(h, ui.size.y) * 0.7
-		var t: int = c["target"]
-		var ok := t >= 0 and _crushable(t)
-		var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.015)
-		ui.draw_arc(h.palm, r, 0, TAU, 48, Color(1.0, 1.0, 1.0, 0.5), 3.0, true)
-		if t < 0:
-			# nothing within reach: show where the hand would land
-			var w: Vector3 = c.get("world", Vector3.ZERO)
+		var disp := h.size * HandSilhouette.draw_scale(h, ui.size.y)
+		var up := (h.pts[9] - h.pts[0]).normalized()
+		var ts: Array = c.get("targets", [])
+		var look := Vector2.ZERO
+		if not ts.is_empty():
+			var b: Dictionary = city.buildings[ts[0]]
+			var w := Vector3(b["center"].x, city.effective_height(ts[0]) * 0.5, b["center"].y)
 			if not cam.is_position_behind(w):
-				var at := cam.unproject_position(w)
-				ui.draw_dashed_line(h.palm, at, Color(1, 1, 1, 0.5), 2.0, 10.0)
-				ui.draw_arc(at, 14.0, 0, TAU, 24, Color(1, 1, 1, 0.7), 3.0, true)
-			continue
-		# a big target marker on the building itself, joined to the palm
-		var b: Dictionary = city.buildings[t]
-		var top := Vector3(b["center"].x, city.effective_height(t) * 0.75, b["center"].y)
-		if cam.is_position_behind(top):
-			continue
-		var at := cam.unproject_position(top)
-		var col := Color(1.0, 0.2, 0.3) if ok else Color(0.55, 0.5, 0.65)
-		var rr := 34.0 + pulse * 8.0
-		ui.draw_dashed_line(h.palm, at, Color(col, 0.8), 3.0, 12.0)
-		ui.draw_arc(at, rr, 0, TAU, 40, col, 5.0, true)
-		for k in 4:
-			var dir := Vector2.from_angle(TAU * k / 4.0 + PI / 4.0)
-			ui.draw_line(at + dir * (rr - 12.0), at + dir * (rr + 14.0), col, 5.0, true)
-		ui.draw_circle(at, 6.0, col)
-		var bname: String = b["name"] if b["name"] != "" else "ビル"
-		var text := ("にぎれ！ %s %dm" if ok else "かたい！ %s %dm") % [bname, int(b["h"])]
-		var pos := at + Vector2(rr + 12, 8)
-		ui.draw_string_outline(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, 8, Color(0.25, 0.02, 0.15, 0.9))
-		ui.draw_string(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1.0, 0.92, 0.95) if ok else col)
-	var ha: HandInput.Hand = input.hands.get(-1)
-	var hb: HandInput.Hand = input.hands.get(1)
-	if ha != null and hb != null and press_target >= 0:
-		ui.draw_dashed_line(ha.palm, hb.palm, Color(1, 0.75, 0.25, 0.8), 4.0, 16.0)
-		ui.draw_circle((ha.palm + hb.palm) * 0.5, 8.0, Color(1, 0.75, 0.25))
+				look = (cam.unproject_position(w) - h.palm).limit_length(1.0)
+		_draw_magic_eye(h.palm + up * disp * 0.05, disp * 0.42, clampf(h.charge * 6.0, 0.0, 1.0), look, h.charge)
+		if not ts.is_empty():
+			var text := "%d棟 にぎれ！" % ts.size()
+			var pos := h.palm + up * disp * 1.4 + Vector2(-60, 0)
+			ui.draw_string_outline(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 28, 10, Color(0.35, 0.02, 0.15, 0.9))
+			ui.draw_string(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Color(1.0, 0.35, 0.45))
 	for pop in popups:
 		var a: float = 1.0 - pop["t"] / 0.9
 		var pos: Vector2 = pop["pos"] - Vector2(0, pop["t"] * 60.0)
@@ -1662,6 +1700,37 @@ func _draw_ui() -> void:
 		ui.draw_rect(Rect2(Vector2.ZERO, ui.size), Color(1.0, 0.2, 0.3, hit_flash * 0.35))
 	if guard_flash > 0.0:
 		ui.draw_rect(Rect2(Vector2.ZERO, ui.size), Color(1.0, 1.0, 1.0, guard_flash * 0.25))
+
+
+## The magic eye that opens in an open palm and glares at what it is about to crush.
+func _draw_magic_eye(c: Vector2, w: float, open: float, look: Vector2, charge: float) -> void:
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.01)
+	ui.draw_arc(c, w * (1.25 + 0.1 * pulse), 0, TAU, 48, Color(1.0, 0.3, 0.6, 0.25 + 0.35 * charge), 6.0, true)
+	var hgt := w * 0.55 * open
+	var outline := Color(0.3, 0.02, 0.25)
+	if hgt < 1.5:
+		ui.draw_line(c - Vector2(w, 0), c + Vector2(w, 0), outline, 4.0, true)
+		return
+	var lid := PackedVector2Array()
+	for i in 17:
+		var t := -1.0 + 2.0 * i / 16.0
+		lid.append(c + Vector2(t * w, -(1.0 - t * t) * hgt))
+	for i in range(15, 0, -1):
+		var t := -1.0 + 2.0 * i / 16.0
+		lid.append(c + Vector2(t * w, (1.0 - t * t) * hgt))
+	ui.draw_colored_polygon(lid, Color(1.0, 0.95, 0.97))
+	var ir := minf(hgt * 0.85, w * 0.45)
+	var ic := c + Vector2(look.x * w * 0.35, look.y * hgt * 0.25)
+	ui.draw_circle(ic, ir, Color(0.85, 0.05, 0.4))
+	ui.draw_circle(ic, ir * 0.7, Color(1.0, 0.35, 0.65))
+	var slit := PackedVector2Array()
+	for i in 16:
+		var a := TAU * i / 16.0
+		slit.append(ic + Vector2(cos(a) * ir * 0.16, sin(a) * ir * 0.8))
+	ui.draw_colored_polygon(slit, Color(0.1, 0.0, 0.08))
+	ui.draw_circle(ic + Vector2(-ir * 0.35, -ir * 0.4), ir * 0.15, Color(1, 1, 1, 0.9))
+	lid.append(lid[0])
+	ui.draw_polyline(lid, outline, 4.0, true)
 
 
 ## Outline of an open hand (same landmarks as the tracker) centred on its palm.

@@ -13,6 +13,7 @@ class Hand:
 	var grow := 0.0  # relative hand-size change per second (> 0 = moving towards the screen)
 	var close_speed := 0.0  # how fast the hand is closing (openness lost per second)
 	var seen := 0.0  # seconds continuously tracked
+	var charge := 0.0  # 0..1: an open palm held up grows the hand (set by main.gd)
 	var pinch := 1.0  # thumb tip <-> index tip distance in hand sizes (small = pinched)
 	var others_open := 1.0  # middle, ring and pinky openness (they stay up while pinching)
 	var like := false  # thumbs-up (いいね): the hand is used for moving, not destroying

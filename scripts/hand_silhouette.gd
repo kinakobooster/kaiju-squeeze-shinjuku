@@ -13,11 +13,10 @@ var scale_factor := 0.5  # SubViewport resolution / screen resolution
 var claw_scale := 1.0  # the claw item makes the claws much longer
 
 
-## The big lie: a hand pushed towards the camera grows in the image, but we draw it smaller,
-## as if it had travelled further into the city (displayed size ~ 1 / camera size).
+## Hands are always drawn the same size, however far they are from the camera,
+## and grow (up to 2.5x) while an open palm charges up.
 static func draw_scale(h: HandInput.Hand, screen_h: float) -> float:
-	var ref := screen_h * 0.17
-	return clampf(pow(ref / maxf(h.size, 1.0), 2.0), 0.3, 2.2)
+	return screen_h * 0.17 / maxf(h.size, 1.0) * (1.0 + 1.5 * h.charge)
 
 
 func _process(_dt: float) -> void:

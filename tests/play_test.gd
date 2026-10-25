@@ -67,6 +67,13 @@ func settle() -> void:
 		await process_frame
 
 
+## Long strides carry us far; put the kaiju back among the small buildings of Kabukicho.
+func teleport_to_town() -> void:
+	main.speed = 0.0
+	main.player.position = Vector3(352, 0, -484)
+	main.player.rotation.y = PI * 0.5
+
+
 ## Like find_target, but walks forward (thumbs-up pumping) until something is in reach.
 func reach_target(crushable: bool) -> Dictionary:
 	var vp := root.get_visible_rect().size
@@ -128,7 +135,7 @@ func _run() -> void:
 			"aimed building is highlighted (target %d)" % main.ctl[1]["target"])
 	await frames(0.1, func(k): return [hand(pos, 1.0 - k, 1)])
 	await frames(0.4, func(_k): return [hand(pos, 0.0, 1)])
-	check(main.score_count == before + 1 and main.banner.text.begins_with("サクッ"),
+	check(main.score_count >= before + 1 and main.banner.text.begins_with("サクッ"),
 			"fast fist crushes with サクッ (banner: %s)" % main.banner.text.split("\n")[0])
 	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
 
@@ -138,11 +145,11 @@ func _run() -> void:
 	before = main.score_count
 	await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
 	await frames(0.8, func(k): return [hand(pos, 1.0 - 0.6 * k, 1)])
-	check(main.active_id >= 0 and main.closure > 0.3 and main.closure < 0.97,
+	check(not main.active_ids.is_empty() and main.closure > 0.3 and main.closure < 0.97,
 			"half-closed fist half-crushes (closure %.2f)" % main.closure)
 	await frames(1.0, func(k): return [hand(pos, 0.4 - 0.4 * k, 1)])
 	await frames(0.3, func(_k): return [hand(pos, 0.0, 1)])
-	check(main.score_count == before + 1 and main.banner.text.begins_with("グジュウ"),
+	check(main.score_count >= before + 1 and main.banner.text.begins_with("グジュウ"),
 			"slow fist crushes with グジュウ (banner: %s)" % main.banner.text.split("\n")[0])
 	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
 
@@ -157,6 +164,17 @@ func _run() -> void:
 			"slap crushes (banner: %s)" % main.banner.text.split("\n")[0])
 	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
 
+	# --- an open palm keeps growing and covers more and more buildings
+	tg = await reach_target(true)
+	pos = tg.get("pos", Vector2.ZERO)
+	await frames(0.5, func(_k): return [hand(pos, 1.0, 1)])
+	var early: int = main.ctl[1]["targets"].size()
+	await frames(2.5, func(_k): return [hand(pos, 1.0, 1)])
+	var late: int = main.ctl[1]["targets"].size()
+	check(main.input.hands[1].charge > 0.95 and late > early and main.city._hover.size() >= late,
+			"held open, the hand grows and every building under it shivers (%d -> %d)" % [early, late])
+	await frames(0.3, idle)
+
 	# --- two-finger pinch
 	tg = await reach_target(true)
 	pos = tg.get("pos", Vector2.ZERO)
@@ -164,7 +182,7 @@ func _run() -> void:
 	await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
 	await frames(0.6, func(k): return [hand(pos, 1.0, 1, 0.17, false, k)])
 	await frames(0.3, func(_k): return [hand(pos, 1.0, 1, 0.17, false, 1.0)])
-	check(main.score_count == before + 1 and main.banner.text.begins_with("プチッ"),
+	check(main.score_count >= before + 1 and main.banner.text.begins_with("プチッ"),
 			"pinching with two fingers crushes with プチッ (banner: %s)" % main.banner.text.split("\n")[0])
 	await frames(0.5, func(_k): return [hand(pos, 1.0, 1)])
 
@@ -249,7 +267,7 @@ func _run() -> void:
 	if not tg.is_empty():
 		before = main.score_count
 		await frames(1.0, func(_k): return [hand(tg["pos"], 0.0, 1, 0.17, true)])
-		check(main.score_count == before and main.active_id < 0, "thumbs-up does not destroy")
+		check(main.score_count == before and main.active_ids.is_empty(), "thumbs-up does not destroy")
 
 	# --- bead pile left behind rattles when stroked
 	check(main.bead_sites.size() >= 3, "crushed lots are full of beads (%d piles)" % main.bead_sites.size())
@@ -293,6 +311,7 @@ func _run() -> void:
 
 	main.active_item = "beam"
 	main.active_time = 10.0
+	teleport_to_town()
 	await settle()
 	before = main.score_count
 	main.input.injected_face = JSON.stringify({"t": 1, "jaw": 0.9, "smile": 0.0, "x": 0.5, "y": 0.62})
@@ -317,7 +336,9 @@ func _run() -> void:
 	main.active_item = ""
 	await frames(0.3, idle)
 
-	# --- stomping when big
+	# --- stomping when big (heading east: the Midas run already cleared the way west)
+	teleport_to_town()
+	main.player.rotation.y = -PI * 0.5
 	main.eye_target = 150.0
 	await settle()
 	before = main.score_count

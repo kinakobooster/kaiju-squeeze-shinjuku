@@ -292,48 +292,69 @@ func effective_height(id: int) -> float:
 	return buildings[id]["h"] * (1.0 - buildings[id]["damage"] * 0.35)
 
 
-func set_hover(a: int, b: int, strength: float) -> void:
-	_hover = [a, b]
-	var want := {}
-	for id in _hover:
-		if id >= 0:
-			want[buildings[id]["chunk"]] = true
-	for key in _hover_chunks.keys() + want.keys():
+const HOVER_MAX := 32  # matches hl_list in building.gdshader
+
+
+## Makes these buildings glow red and shiver (the ones under an open hand).
+func set_hover(ids: Array, strength: float) -> void:
+	_hover = ids
+	var by_chunk := {}
+	for id in ids:
+		var key: Vector2i = buildings[id]["chunk"]
+		if not by_chunk.has(key):
+			by_chunk[key] = PackedFloat32Array()
+		if by_chunk[key].size() < HOVER_MAX:
+			by_chunk[key].append(id)
+	for key in _hover_chunks.keys() + by_chunk.keys():
 		var mi: MeshInstance3D = _chunk_nodes.get(key)
 		if mi == null:
 			continue
-		var m: ShaderMaterial = mi.material_override
-		var on := want.has(key)
-		m.set_shader_parameter("hl_a", a if on else -1)
-		m.set_shader_parameter("hl_b", b if on else -1)
-		m.set_shader_parameter("hl_strength", strength if on else 0.0)
-	_hover_chunks = want
+		_set_hover_params(mi.material_override, by_chunk.get(key, PackedFloat32Array()), strength)
+	_hover_chunks = by_chunk
 	for id in _detached:
-		var dm: ShaderMaterial = _detached[id].material_override
-		var on: bool = id == a or id == b
-		dm.set_shader_parameter("hl_a", id if on else -1)
-		dm.set_shader_parameter("hl_strength", strength if on else 0.0)
+		var on: bool = ids.has(id)
+		_set_hover_params(_detached[id].material_override, PackedFloat32Array([id]) if on else PackedFloat32Array(), strength)
+
+
+static func _set_hover_params(m: ShaderMaterial, list: PackedFloat32Array, strength: float) -> void:
+	var padded := list.duplicate()
+	padded.resize(HOVER_MAX)
+	m.set_shader_parameter("hl_list", padded)
+	m.set_shader_parameter("hl_count", list.size())
+	m.set_shader_parameter("hl_strength", strength if list.size() > 0 else 0.0)
 
 
 ## Returns the deformable mesh for a building, detaching it from its chunk on first use.
 func detach(id: int) -> MeshInstance3D:
-	if _detached.has(id):
-		return _detached[id]
-	var b: Dictionary = buildings[id]
-	var mi := MeshInstance3D.new()
-	var rows := clampi(int(b["h"] / 3.0), 8, 40)
-	var max_seg := clampf(b["radius"] / 4.0, 2.0, 8.0)
-	mi.mesh = _arrays_to_mesh([_build_arrays(id, b, b["center"], rows, max_seg)])
-	var m := ShaderMaterial.new()
-	m.shader = BUILDING_SHADER
-	m.set_shader_parameter("bheight", b["h"])
-	m.set_shader_parameter("juice_color", b["juice"])
-	mi.material_override = m
-	mi.position = Vector3(b["center"].x, 0.0, b["center"].y)
-	add_child(mi)
-	_detached[id] = mi
-	_rebuild_chunk(b["chunk"])
-	return mi
+	return detach_many([id])[id]
+
+
+## Detaches several buildings, rebuilding each affected chunk only once. Returns id -> mesh.
+func detach_many(ids: Array) -> Dictionary:
+	var out := {}
+	var chunks := {}
+	for id in ids:
+		if _detached.has(id):
+			out[id] = _detached[id]
+			continue
+		var b: Dictionary = buildings[id]
+		var mi := MeshInstance3D.new()
+		var rows := clampi(int(b["h"] / 3.0), 8, 40)
+		var max_seg := clampf(b["radius"] / 4.0, 2.0, 8.0)
+		mi.mesh = _arrays_to_mesh([_build_arrays(id, b, b["center"], rows, max_seg)])
+		var m := ShaderMaterial.new()
+		m.shader = BUILDING_SHADER
+		m.set_shader_parameter("bheight", b["h"])
+		m.set_shader_parameter("juice_color", b["juice"])
+		mi.material_override = m
+		mi.position = Vector3(b["center"].x, 0.0, b["center"].y)
+		add_child(mi)
+		_detached[id] = mi
+		out[id] = mi
+		chunks[b["chunk"]] = true
+	for key in chunks:
+		_rebuild_chunk(key)
+	return out
 
 
 func destroy(id: int) -> void:
