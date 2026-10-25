@@ -68,19 +68,16 @@ float kaiju_shadow(vec3 world) {
 	return sh;
 }
 
-// 0..1: a soft dashed ring on the ground and roofs at arm's reach
-float kaiju_reach_ring(vec3 world) {
+// Inside arm's reach stays colourful; outside fades to monochrome while we reach.
+vec3 kaiju_reach_tint(vec3 world, vec3 col) {
 	if (kaiju_reach.w < 0.01) {
-		return 0.0;
+		return col;
 	}
-	vec2 d = world.xz - kaiju_reach.xy;
-	float r = length(d);
-	float width = max(0.8, kaiju_reach.z * 0.025);
-	float band = 1.0 - smoothstep(0.0, width, abs(r - kaiju_reach.z));
-	float dash = step(0.0, sin(atan(d.y, d.x) * 48.0));
-	return band * dash * kaiju_reach.w;
+	float r = length(world.xz - kaiju_reach.xy);
+	float soft = max(1.5, kaiju_reach.z * 0.06);
+	float outside = smoothstep(kaiju_reach.z - soft, kaiju_reach.z + soft, r) * kaiju_reach.w;
+	float grey = dot(col, vec3(0.299, 0.587, 0.114));
+	return mix(col, vec3(grey) * 0.9, outside * 0.92);
 }
-
-const vec3 KAIJU_REACH_COLOR = vec3(1.0, 0.92, 0.98);
 
 const vec3 KAIJU_SHADOW_TINT = vec3(0.68, 0.56, 0.86);

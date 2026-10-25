@@ -14,8 +14,6 @@ void vertex() {
 
 void fragment() {
 	vec3 col = use_vertex_color ? COLOR.rgb : albedo.rgb;
-	float ring = kaiju_reach_ring(v_world);
-	ALBEDO = mix(mix(col, col * KAIJU_SHADOW_TINT, kaiju_shadow(v_world)), KAIJU_REACH_COLOR, ring * 0.8);
-	EMISSION = KAIJU_REACH_COLOR * ring * 0.4;
+	ALBEDO = kaiju_reach_tint(v_world, mix(col, col * KAIJU_SHADOW_TINT, kaiju_shadow(v_world)));
 	ROUGHNESS = 1.0;
 }
