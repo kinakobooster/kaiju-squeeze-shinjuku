@@ -25,6 +25,9 @@ const SNAP_TIME := 0.3  # crushed faster than this = サクッ
 const SLAP_GROW := 2.2  # hand size growth per second that counts as a slap
 const SLAP_SPEED := 4.5  # screen heights per second that counts as a smash
 const AREA_LIMIT := Rect2(-1150, -1050, 2300, 2100)
+const BOSS_TIME := 180.0  # the alien of justice lands after three minutes
+const EYE_MIN := 15.0  # shrink below this and the alien wins
+const GUARD_RADIUS := 0.2  # screen heights: an open palm this close to the incoming fist catches it
 
 var city: City
 var input: HandInput
@@ -49,6 +52,19 @@ var yaw_vel := 0.0
 var shake := 0.0
 var bead_sites: Array[Dictionary] = []  # {center: Vector2, radius, node, cool, bounce}
 var popups: Array[Dictionary] = []  # {text, pos, t}
+var pitch := CAM_PITCH
+
+# boss fight
+var boss: Boss
+var boss_timer := BOSS_TIME
+var game_state := "play"  # play, boss, won, lost
+var boss_landing := false
+var hit_flash := 0.0
+var guard_flash := 0.0
+var grab_ready := {-1: false, 1: false}
+var end_time := 0.0
+var restart_hold := 0.0
+var end_label: Label
 var eye := EYE_START
 var eye_target := EYE_START
 var ready_to_play := false
@@ -93,6 +109,11 @@ func _ready() -> void:
 	juice_fx = _make_particles(SphereMesh.new(), 260, Color.WHITE, 6.0)
 	debris_fx = _make_particles(BoxMesh.new(), 140, Color(0.5, 0.5, 0.5), 5.0)
 	loading.visible = false
+	if OS.has_feature("web"):  # ?boss=10 brings the alien early (for trying the fight)
+		var q := str(JavaScriptBridge.eval("location.search", true))
+		var m := RegEx.create_from_string("boss=(\\d+)").search(q)
+		if m:
+			boss_timer = float(m.get_string(1))
 	ready_to_play = true
 
 
@@ -272,6 +293,14 @@ func _setup_ui() -> void:
 	loading.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	loading.grow_vertical = Control.GROW_DIRECTION_BOTH
 	loading.text = "新宿を読み込み中…"
+	end_label = _label(top, 44, Vector2.ZERO)
+	end_label.add_theme_font_override("font", font_big)
+	end_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	end_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	end_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	end_label.add_theme_color_override("font_outline_color", Color(0.35, 0.05, 0.45))
+	end_label.add_theme_constant_override("outline_size", 18)
+	end_label.visible = false
 
 
 func _label(parent: Node, size: int, pos: Vector2) -> Label:
@@ -335,6 +364,7 @@ func _process(dt: float) -> void:
 	_update_squeeze(dt)
 	_update_relaxing(dt)
 	_update_shadows_and_beads(dt)
+	_update_boss(dt)
 	_update_camera(dt)
 	if banner_time > 0.0:
 		banner_time -= dt
@@ -345,6 +375,8 @@ func _process(dt: float) -> void:
 		hint_time -= dt
 		hint.modulate.a = clampf(hint_time * 2.0, 0.0, 1.0)
 	hud.text = "身長 %dm  ／  つぶせる高さ %dm まで  ／  スクイーズ %d棟" % [int(eye), int(crush_limit()), score_count]
+	if game_state == "play":
+		hud.text += "  ／  宇宙人到着まで %d:%02d" % [int(boss_timer) / 60, int(boss_timer) % 60]
 	var hm: ShaderMaterial = hand_rect.material
 	hm.set_shader_parameter("grip_glow", closure if active_id >= 0 else 0.0)
 	ui.queue_redraw()
@@ -354,6 +386,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_H:
 			help.visible = not help.visible
+		elif event.keycode == KEY_R and (game_state == "won" or game_state == "lost"):
+			get_tree().reload_current_scene()
 		elif event.keycode == KEY_P and OS.has_feature("web"):
 			JavaScriptBridge.eval("window.kaijuTogglePreview && window.kaijuTogglePreview()")
 
@@ -418,6 +452,17 @@ func _update_hands(dt: float) -> void:
 			c["still"] = 0.0
 			continue
 		var spd := h.vel.length()
+		if game_state != "play" and boss != null and _palm_on_boss(h.palm):
+			c["state"] = State.MOVE
+			c["target"] = -1
+			c["still"] = 0.0
+			if not boss.stunned and c["cool"] <= 0.0 and h.seen > 0.3 \
+					and (h.grow > SLAP_GROW or (spd > SLAP_SPEED and input.source == "camera")):
+				c["cool"] = 0.35
+				_hit_boss(h.palm)
+			continue
+		if game_state == "won" or game_state == "lost":
+			continue
 		# slap towards the screen, or a very fast swipe, smashes whatever is under the palm
 		if c["state"] != State.GRIP and c["cool"] <= 0.0 and h.seen > 0.3 \
 				and (h.grow > SLAP_GROW or (spd > SLAP_SPEED and input.source == "camera")):
@@ -807,7 +852,222 @@ func _update_camera(dt: float) -> void:
 	shake = maxf(shake - dt * 2.5, 0.0)
 	var s := shake * shake * 1.5 * clampf(eye / 80.0, 0.4, 1.5)
 	cam.position = Vector3(randf_range(-s, s), eye + randf_range(-s, s), 0)
-	cam.rotation_degrees = Vector3(CAM_PITCH, 0.0, 0.0)
+	var want := CAM_PITCH
+	if boss != null and game_state != "play":  # look the alien in the chest
+		var flat := Vector2(boss.position.x - player.position.x, boss.position.z - player.position.z).length()
+		want = clampf(rad_to_deg(atan2(boss.chest().y - eye, maxf(flat, 1.0))), CAM_PITCH, 30.0)
+	pitch = lerpf(pitch, want, 1.0 - exp(-3.0 * dt))
+	cam.rotation_degrees = Vector3(pitch, 0.0, 0.0)
+
+
+# --- boss fight ---------------------------------------------------------------------------
+
+func punch_loss() -> float:
+	return 4.0 + eye_target * 0.06
+
+
+func _boss_distance() -> float:
+	return 120.0 + eye * 0.4
+
+
+func _update_boss(dt: float) -> void:
+	hit_flash = maxf(hit_flash - dt * 2.0, 0.0)
+	guard_flash = maxf(guard_flash - dt * 3.0, 0.0)
+	match game_state:
+		"play":
+			boss_timer -= dt
+			if boss_timer <= 0.0:
+				_spawn_boss()
+		"boss":
+			_fight(dt)
+		_:
+			end_time += dt
+			if boss != null:
+				boss.tick(dt, cam.global_basis.x)
+			# both hands open and held up for a moment = play again
+			var open := 0
+			for h in input.hands.values():
+				if h.openness > 0.8 and not h.like:
+					open += 1
+			restart_hold = restart_hold + dt if open == 2 and end_time > 2.0 else 0.0
+			if restart_hold > 1.5:
+				get_tree().reload_current_scene()
+
+
+func _spawn_boss() -> void:
+	game_state = "boss"
+	boss = Boss.new()
+	add_child(boss)
+	var fwd := -player.global_basis.z
+	var at := player.position + fwd * _boss_distance()
+	boss.position = Vector3(at.x, 700.0, at.z)
+	boss_landing = true
+	_end_squeeze()
+	banner.text = "せいぎの宇宙人が\nあらわれた！！"
+	banner_time = 3.0
+	hint.text = "パンチは パーで受け止めてガード！ 叩いて反撃！ 大きいほど有利！"
+	hint_time = 5.0
+
+
+func _fight(dt: float) -> void:
+	var to := Vector2(boss.position.x - player.position.x, boss.position.z - player.position.z)
+	var dir := to.normalized() if to.length() > 1.0 else Vector2(-player.global_basis.z.x, -player.global_basis.z.z)
+	if boss_landing:
+		boss.position.y = move_toward(boss.position.y, 0.0, dt * 600.0)
+		if boss.position.y <= 0.0:
+			boss_landing = false
+			shake = 1.5
+			sfx.play(sfx.thud, 0.5, 4.0)
+			sfx.play(sfx.burst, 0.6, -2.0)
+			var foot := Vector2(boss.position.x, boss.position.z)
+			for id in city.buildings.size():  # whatever it landed on is gone
+				var b: Dictionary = city.buildings[id]
+				if b["alive"] and foot.distance_to(b["center"]) < 45.0 + b["radius"] * 0.5:
+					city.destroy(id)
+	else:
+		var want := Vector2(player.position.x, player.position.z) + dir * _boss_distance()
+		var cur := Vector2(boss.position.x, boss.position.z).lerp(want, 1.0 - exp(-0.8 * dt))
+		boss.position = Vector3(cur.x, 0.0, cur.y)
+	boss.look_at(Vector3(player.position.x, boss.position.y, player.position.z), Vector3.UP)
+	# keep the alien in front of us
+	var face := atan2(-dir.x, -dir.y)
+	player.rotation.y = lerp_angle(player.rotation.y, face, 1.0 - exp(-2.5 * dt))
+	var impact := boss.tick(dt, cam.global_basis.x)
+	if boss_landing:
+		return
+	if boss.stunned:
+		_crush_boss(dt)
+		return
+	if boss.phase == Boss.Phase.IDLE:
+		boss.next_punch -= dt
+		if boss.next_punch <= 0.0:
+			var side := 1 if randf() < 0.5 else -1
+			var cb := cam.global_basis
+			var target := cam.global_position - cb.z * (eye * 0.5 + 15.0) + cb.x * side * eye * 0.22 - cb.y * eye * 0.06
+			boss.start_punch(target, side)
+			boss.next_punch = randf_range(1.0, 2.6) * (0.55 + 0.45 * boss.hp / 100.0)
+	if impact:
+		_resolve_punch()
+
+
+func _punch_spot() -> Vector2:
+	return cam.unproject_position(boss.punch_target)
+
+
+func _resolve_punch() -> void:
+	var spot := _punch_spot()
+	var vp := get_viewport().get_visible_rect().size
+	for h in input.hands.values():
+		if h.like or h.openness < 0.45:
+			continue
+		if h.palm.distance_to(spot) < vp.y * GUARD_RADIUS:
+			guard_flash = 1.0
+			shake = maxf(shake, 0.3)
+			sfx.play(sfx.thud, 1.5, -2.0)
+			sfx.play(sfx.snaps.pick_random(), 1.4, -6.0)
+			popups.append({"text": "ガード！", "pos": spot, "t": 0.0})
+			return
+	# no hit points: every punch knocks height off you (bigger kaiju can take more punches)
+	var loss := punch_loss()
+	eye_target -= loss
+	eye = minf(eye, eye_target + loss * 0.5)  # visibly shrink right away
+	hit_flash = 1.0
+	shake = 1.2
+	sfx.play(sfx.thud, 0.8, 3.0)
+	sfx.play(sfx.cracks.pick_random(), 0.7, 0.0)
+	popups.append({"text": "ちぢんだ！ -%dm" % int(round(loss)), "pos": spot, "t": 0.0})
+	if eye_target < EYE_MIN:
+		_lose()
+
+
+## Is this screen point on the alien's body? (head-to-hips capsule on screen)
+func _palm_on_boss(p: Vector2) -> bool:
+	if boss == null or boss_landing:
+		return false
+	var hip := boss.global_transform * Vector3(0, 60 * (1.0 - boss.squash * 0.6), 0)
+	for w in [boss.head(), hip]:
+		if cam.is_position_behind(w):
+			return false
+	var a := cam.unproject_position(boss.head())
+	var b := cam.unproject_position(hip)
+	var c := cam.unproject_position(boss.chest())
+	var r := c.distance_to(cam.unproject_position(boss.chest() + cam.global_basis.x * 45.0))
+	return p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)) < r
+
+
+func _hit_boss(at: Vector2) -> void:
+	var dmg := 4.0 * eye / 50.0
+	if boss.phase == Boss.Phase.WINDUP:
+		dmg *= 1.5  # counter while it winds up
+	boss.hp = maxf(boss.hp - dmg, 0.0)
+	boss.hurt = 1.0
+	shake = maxf(shake, 0.6)
+	sfx.play_slap(0.8)
+	popups.append({"text": "バチーン！ -%d" % maxi(int(dmg), 1), "pos": at, "t": 0.0})
+	if boss.hp <= 0.0:
+		boss.stunned = true
+		boss.phase = Boss.Phase.IDLE
+		banner.text = "今だ！\n握りつぶせ！！"
+		banner_time = 3.0
+		hint.text = "宇宙人の上でパーにしてから ギュッと握れ！"
+		hint_time = 6.0
+
+
+func _crush_boss(dt: float) -> void:
+	var best := 0.0
+	var closing := 0.0
+	for side in [-1, 1]:
+		var h: HandInput.Hand = input.hands.get(side)
+		if h == null or h.like or not _palm_on_boss(h.palm):
+			grab_ready[side] = false
+			continue
+		if h.openness > 0.6:
+			grab_ready[side] = true
+		if grab_ready[side]:
+			best = maxf(best, clampf((GRIP_OPEN - h.openness) / (GRIP_OPEN - FIST_OPEN), 0.0, 1.0))
+			closing = maxf(closing, h.close_speed / (GRIP_OPEN - FIST_OPEN))
+	boss.squash = best if best > boss.squash else lerpf(boss.squash, best, 1.0 - exp(-2.0 * dt))
+	sfx.update_squeeze(dt, best > 0.02, maxf(closing, 0.0), best, 0.5)
+	shake = maxf(shake, best * 0.4)
+	if boss.squash >= 0.97:
+		_win()
+
+
+func _win() -> void:
+	game_state = "won"
+	sfx.play_squish(0.45)
+	sfx.play(sfx.burst, 0.4, 4.0)
+	shake = 2.0
+	var c := Vector2(boss.position.x, boss.position.z)
+	var poly := PackedVector2Array()
+	for k in 16:
+		poly.append(c + Vector2.from_angle(TAU * k / 16.0) * 75.0)
+	var fake := {"poly": poly, "rect": Rect2(c - Vector2(75, 75), Vector2(150, 150)), "center": c,
+			"radius": 75.0, "area": PI * 75.0 * 75.0, "juice": Color(1.0, 0.6, 0.85), "color": Color(0.93, 0.93, 1.0)}
+	_spawn_beads(fake)
+	for fx in [juice_fx, debris_fx]:
+		var one: CPUParticles3D = fx.duplicate()
+		add_child(one)
+		one.global_position = boss.chest()
+		one.emission_sphere_radius = 60.0
+		one.one_shot = true
+		one.explosiveness = 0.9
+		one.initial_velocity_max = 160.0
+		one.color = fake["juice"] if fx == juice_fx else fake["color"]
+		one.emitting = true
+		get_tree().create_timer(4.0).timeout.connect(one.queue_free)
+	boss.queue_free()
+	boss = null
+	end_label.text = "勝利！！\nせいぎの宇宙人を スクイーズした！\n\nスクイーズ %d棟 ／ 身長 %dm\n\nRキー か 両手をパーで もう一度" % [score_count, int(eye)]
+	end_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.3))
+	end_label.visible = true
+
+
+func _lose() -> void:
+	game_state = "lost"
+	end_label.text = "GAME OVER\n殴られて ちぢんでしまった…\n\nスクイーズ %d棟 ／ 身長 %dm\nもっと大きくなってから挑もう！\n\nRキー か 両手をパーで もう一度" % [score_count, int(eye)]
+	end_label.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
+	end_label.visible = true
 
 
 # --- overlay ------------------------------------------------------------------------------
@@ -821,7 +1081,7 @@ func _draw_ui() -> void:
 		var c: Dictionary = ctl[side]
 		if c["state"] != State.AIM:
 			continue
-		var r := h.size * 0.7
+		var r := h.size * HandSilhouette.draw_scale(h, ui.size.y) * 0.7
 		var t: int = c["target"]
 		var ok := t >= 0 and _crushable(t)
 		var col := Color(1.0, 0.75, 0.25) if ok else (Color(0.6, 0.55, 0.7, 0.8) if t >= 0 else Color(0.35, 0.1, 0.5, 0.7))
@@ -843,3 +1103,28 @@ func _draw_ui() -> void:
 		var pos: Vector2 = pop["pos"] - Vector2(0, pop["t"] * 60.0)
 		ui.draw_string_outline(font_big, pos, pop["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, 30, 10, Color(0.4, 0.2, 0.6, a))
 		ui.draw_string(font_big, pos, pop["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(0.95, 0.97, 1.0, a))
+	if boss != null and game_state == "boss" and not boss_landing:
+		var vp := ui.size
+		if boss.phase == Boss.Phase.WINDUP or boss.phase == Boss.Phase.STRIKE:
+			var spot := _punch_spot()
+			var u := clampf(boss.phase_t / Boss.WINDUP_TIME, 0.0, 1.0) if boss.phase == Boss.Phase.WINDUP else 1.0
+			var rr := vp.y * GUARD_RADIUS * (1.6 - 0.6 * u)
+			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.03)
+			ui.draw_arc(spot, rr, 0, TAU, 48, Color(1.0, 0.3, 0.4, 0.5 + 0.5 * pulse), 6.0, true)
+			ui.draw_arc(spot, vp.y * GUARD_RADIUS, 0, TAU, 48, Color(1.0, 1.0, 1.0, 0.6), 2.0, true)
+			ui.draw_string_outline(font_big, spot + Vector2(-60, -rr - 10), "うけとめろ！", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, 8, Color(0.4, 0.05, 0.2))
+			ui.draw_string(font_big, spot + Vector2(-60, -rr - 10), "うけとめろ！", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1.0, 0.85, 0.9))
+		_draw_bar(Vector2(vp.x * 0.5 - 150, 128), "せいぎの宇宙人", boss.hp / 100.0, Color(1.0, 0.6, 0.8))
+	if hit_flash > 0.0:
+		ui.draw_rect(Rect2(Vector2.ZERO, ui.size), Color(1.0, 0.2, 0.3, hit_flash * 0.35))
+	if guard_flash > 0.0:
+		ui.draw_rect(Rect2(Vector2.ZERO, ui.size), Color(1.0, 1.0, 1.0, guard_flash * 0.25))
+
+
+func _draw_bar(pos: Vector2, label: String, v: float, col: Color) -> void:
+	var w := 300.0
+	ui.draw_rect(Rect2(pos, Vector2(w, 18)), Color(0.2, 0.05, 0.3, 0.6))
+	ui.draw_rect(Rect2(pos, Vector2(w * clampf(v, 0.0, 1.0), 18)), col)
+	ui.draw_rect(Rect2(pos, Vector2(w, 18)), Color(1, 1, 1, 0.8), false, 2.0)
+	ui.draw_string_outline(font_big, pos + Vector2(0, -6), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, 6, Color(0.3, 0.05, 0.4))
+	ui.draw_string(font_big, pos + Vector2(0, -6), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
