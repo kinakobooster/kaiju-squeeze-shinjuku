@@ -13,6 +13,8 @@ class Hand:
 	var grow := 0.0  # relative hand-size change per second (> 0 = moving towards the screen)
 	var close_speed := 0.0  # how fast the hand is closing (openness lost per second)
 	var seen := 0.0  # seconds continuously tracked
+	var pinch := 1.0  # thumb tip <-> index tip distance in hand sizes (small = pinched)
+	var others_open := 1.0  # middle, ring and pinky openness (they stay up while pinching)
 	var like := false  # thumbs-up (いいね): the hand is used for moving, not destroying
 	var like_score := 0.0
 	var like_hold := 0.0
@@ -58,6 +60,7 @@ var _clock := 0.0
 ## Test hook: when set, used instead of window.kaijuHands (same JSON format).
 var injected := ""
 var _mouse_slap := 0.0
+var _mouse_pinch := 0.0
 
 
 func _process(dt: float) -> void:
@@ -142,6 +145,7 @@ func _read_mouse(dt: float, size: Vector2) -> void:
 	var closing := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or quick
 	_mouse_open = move_toward(_mouse_open, 0.0 if closing else 1.0, dt * (14.0 if quick or not closing else 1.1))
 	var hand_size := size.y * 0.2
+	_mouse_pinch = move_toward(_mouse_pinch, 1.0 if Input.is_key_pressed(KEY_Q) else 0.0, dt * 1.5)
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
 		_mouse_slap = minf(_mouse_slap + dt * 6.0, 1.0)
 	else:
@@ -166,6 +170,8 @@ func _fake_pts(palm: Vector2, s: float, openness: float, mirror: float, rot: flo
 	var wrist := palm + Vector2(0, s * 0.55)
 	for k in 21:
 		var q: Vector2 = LIKE[k] if Input.is_key_pressed(KEY_T) else FIST[k].lerp(OPEN[k], openness)
+		if Input.is_key_pressed(KEY_Q) and (k == 4 or k == 8):  # pinch: thumb and index tips meet
+			q = OPEN[k].lerp((OPEN[4] + OPEN[8]) * 0.5, _mouse_pinch)
 		q.x *= mirror
 		pts.append(wrist + q.rotated(rot) * s)
 	return pts
@@ -194,6 +200,12 @@ func _update_hand(side: int, pts: PackedVector2Array, openness: float, dt: float
 	h.pts = pts
 	h.size = new_size
 	h.seen += dt
+	h.pinch = lerpf(h.pinch, pts[4].distance_to(pts[8]) / maxf(new_size, 1.0), a)
+	var others := 0.0
+	for fi in FINGERS.slice(1):
+		var ratio := pts[0].distance_to(pts[fi[2]]) / maxf(pts[0].distance_to(pts[fi[0]]), 1.0)
+		others += clampf((ratio - 1.15) / 0.6, 0.0, 1.0)
+	h.others_open = lerpf(h.others_open, others / 3.0, a)
 	# thumbs-up with hysteresis and a short grace period (fast pumping blurs the camera image)
 	h.like_score = lerpf(h.like_score, like_score(pts, h.openness), a)
 	if h.like_score > 0.6:

@@ -337,12 +337,52 @@ func detach(id: int) -> MeshInstance3D:
 
 
 func destroy(id: int) -> void:
-	var b: Dictionary = buildings[id]
-	b["alive"] = false
-	if _detached.has(id):
-		_detached[id].queue_free()
-		_detached.erase(id)
-	_rebuild_chunk(b["chunk"])
+	destroy_many([id])
+
+
+## Removes several buildings, rebuilding each affected chunk only once.
+func destroy_many(ids: Array) -> void:
+	var chunks := {}
+	for id in ids:
+		var b: Dictionary = buildings[id]
+		b["alive"] = false
+		if _detached.has(id):
+			_detached[id].queue_free()
+			_detached.erase(id)
+		chunks[b["chunk"]] = true
+	for key in chunks:
+		_rebuild_chunk(key)
+
+
+## The living building whose footprint contains this ground point, or -1.
+func building_at(q: Vector2) -> int:
+	var cell := Vector2i(floori(q.x / CELL), floori(q.y / CELL))
+	for id in _cells.get(cell, PackedInt32Array()):
+		var b: Dictionary = buildings[id]
+		if b["alive"] and b["rect"].has_point(q) and Geometry2D.is_point_in_polygon(q, b["poly"]):
+			return id
+	return -1
+
+
+## Living buildings whose footprint comes within r of the segment a-b (a hand-and-arm shadow).
+func buildings_in_capsule(a: Vector2, b: Vector2, r: float) -> Array[int]:
+	var out: Array[int] = []
+	var box := Rect2(a, Vector2.ZERO).expand(b).grow(r)
+	var seen := {}
+	for cx in range(floori(box.position.x / CELL), floori(box.end.x / CELL) + 1):
+		for cz in range(floori(box.position.y / CELL), floori(box.end.y / CELL) + 1):
+			for id in _cells.get(Vector2i(cx, cz), PackedInt32Array()):
+				if seen.has(id):
+					continue
+				seen[id] = true
+				var bd: Dictionary = buildings[id]
+				if not bd["alive"]:
+					continue
+				var c: Vector2 = bd["center"]
+				var d := c.distance_to(Geometry2D.get_closest_point_to_segment(c, a, b))
+				if d < r + bd["radius"] * 0.5:
+					out.append(id)
+	return out
 
 
 ## Pushes a point out of tall building footprints (the camera should not end up inside towers).

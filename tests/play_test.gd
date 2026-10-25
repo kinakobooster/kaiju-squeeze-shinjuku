@@ -17,11 +17,13 @@ func _initialize() -> void:
 
 
 ## One synthetic hand whose palm sits at `palm` (screen pixels).
-func hand(palm: Vector2, openness: float, side: int, size := 0.17, like := false) -> Dictionary:
+func hand(palm: Vector2, openness: float, side: int, size := 0.17, like := false, pinch := 0.0) -> Dictionary:
 	var vp := root.get_visible_rect().size
 	var pts: Array[Vector2] = []
 	for k in 21:
 		var q: Vector2 = HandInput.LIKE[k] if like else FIST[k].lerp(OPEN[k], openness)
+		if pinch > 0.0 and (k == 4 or k == 8):
+			q = q.lerp((OPEN[4] + OPEN[8]) * 0.5, pinch)
 		pts.append(Vector2(q.x * side * 0.75, q.y) * size * vp.y)
 	var c := (pts[0] + pts[5] + pts[9] + pts[13] + pts[17]) / 5.0
 	var p := []
@@ -90,6 +92,8 @@ func _run() -> void:
 	var pos: Vector2 = tg.get("pos", Vector2.ZERO)
 	var before: int = main.score_count
 	await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
+	check(main.city._hover.has(main.ctl[1]["target"]) and main.ctl[1]["target"] >= 0,
+			"aimed building is highlighted (target %d)" % main.ctl[1]["target"])
 	await frames(0.1, func(k): return [hand(pos, 1.0 - k, 1)])
 	await frames(0.4, func(_k): return [hand(pos, 0.0, 1)])
 	check(main.score_count == before + 1 and main.banner.text.begins_with("サクッ"),
@@ -119,10 +123,54 @@ func _run() -> void:
 	await frames(0.5, func(_k): return [hand(pos, 1.0, 1)])
 	await frames(0.15, func(k): return [hand(pos, 1.0, 1, 0.17 + 0.15 * k)])
 	await frames(0.3, func(_k): return [hand(pos, 1.0, 1, 0.32)])
-	check(main.score_count == before + 1 and main.banner.text.begins_with("バチーン"),
-			"slap crushes with バチーン (banner: %s)" % main.banner.text.split("\n")[0])
-	check(main.eye_target > main.EYE_START, "kaiju grows (eye target %.1fm)" % main.eye_target)
+	check(main.score_count >= before + 1 and (main.banner.text.begins_with("バチーン") or main.banner.text.begins_with("ドドド")),
+			"slap crushes (banner: %s)" % main.banner.text.split("\n")[0])
+	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
+
+	# --- two-finger pinch
+	await settle()
+	tg = find_target(true)
+	pos = tg.get("pos", Vector2.ZERO)
+	before = main.score_count
+	await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
+	await frames(0.6, func(k): return [hand(pos, 1.0, 1, 0.17, false, k)])
+	await frames(0.3, func(_k): return [hand(pos, 1.0, 1, 0.17, false, 1.0)])
+	check(main.score_count == before + 1 and main.banner.text.begins_with("プチッ"),
+			"pinching with two fingers crushes with プチッ (banner: %s)" % main.banner.text.split("\n")[0])
+	await frames(0.5, func(_k): return [hand(pos, 1.0, 1)])
+
+	# --- once big, one slap flattens a whole patch of small buildings
+	main.eye_target = 120.0
+	await settle()
+	var vp0 := root.get_visible_rect().size
+	before = main.score_count
+	var spot := Vector2(vp0.x * 0.5, vp0.y * 0.6)
+	await frames(0.5, func(_k): return [hand(spot, 1.0, 1)])
+	await frames(0.15, func(k): return [hand(spot, 1.0, 1, 0.17 + 0.15 * k)])
+	await frames(0.3, func(_k): return [hand(spot, 1.0, 1, 0.32)])
+	check(main.score_count >= before + 3 and main.banner.text.begins_with("ドドド"),
+			"big slap flattens many buildings at once (%d, banner: %s)" % [main.score_count - before, main.banner.text.split("\n")[0]])
 	await frames(0.6, idle)
+
+	await settle()
+	var zara := false
+	for site in main.bead_sites:
+		var w := Vector3(site["center"].x, 1.0, site["center"].y)
+		if main.cam.is_position_behind(w):
+			continue
+		var sp: Vector2 = main.cam.unproject_position(w)
+		if not root.get_visible_rect().has_point(sp) or not main._ray(sp).is_empty():
+			continue  # off screen or hidden behind a building
+		if site["center"].distance_to(Vector2(main.player.position.x, main.player.position.z)) > main.reach():
+			continue
+		await frames(0.8, func(k): return [hand(sp + Vector2(sin(k * TAU * 3.0) * 60.0, 0.0), 1.0, 1)])
+		for pop in main.popups:
+			zara = zara or pop["text"] == "ざらざら！"
+		if zara:
+			break
+	check(zara, "stroking a bead pile goes ざらざら")
+
+	check(main.eye_target > main.EYE_START, "kaiju grows (eye target %.1fm)" % main.eye_target)
 
 	# --- too tall to crush yet
 	await settle()
@@ -178,20 +226,6 @@ func _run() -> void:
 
 	# --- bead pile left behind rattles when stroked
 	check(main.bead_sites.size() >= 3, "crushed lots are full of beads (%d piles)" % main.bead_sites.size())
-	var zara := false
-	for site in main.bead_sites:
-		var w := Vector3(site["center"].x, 1.0, site["center"].y)
-		if main.cam.is_position_behind(w):
-			continue
-		var sp: Vector2 = main.cam.unproject_position(w)
-		if not root.get_visible_rect().has_point(sp):
-			continue
-		await frames(0.8, func(k): return [hand(sp + Vector2(sin(k * TAU * 3.0) * 60.0, 0.0), 1.0, 1)])
-		for pop in main.popups:
-			zara = zara or pop["text"] == "ざらざら！"
-		if zara:
-			break
-	check(zara, "stroking a bead pile goes ざらざら")
 
 	print("DONE  failures=%d" % failures)
 	quit(1 if failures > 0 else 0)

@@ -1,13 +1,15 @@
 class_name Boss
 extends Node3D
-## The 200m "alien of justice": lands three minutes in and boxes with the kaiju.
+## The 500m "alien of justice": lands three minutes in and boxes with the kaiju.
+## The model is built 200 units tall and scaled up by SIZE.
 ## It always faces the player; punches are telegraphed (WINDUP), fly at the camera (STRIKE)
 ## and come back (RECOVER). main.gd decides guard / hit and drives the damage.
 
 enum Phase { IDLE, WINDUP, STRIKE, RECOVER }
 
-const HEIGHT := 200.0
-const WINDUP_TIME := 1.1
+const HEIGHT := 200.0  # model units
+const SIZE := 2.5  # model units -> metres (500m tall)
+const WINDUP_TIME := 1.3
 const STRIKE_TIME := 0.18
 const RECOVER_TIME := 0.6
 
@@ -21,6 +23,7 @@ var punch_target := Vector3.ZERO  # world point the fist flies to (just in front
 var next_punch := 2.5
 var hurt := 0.0  # flash when hit
 
+var _rig := Node3D.new()
 var _body := Node3D.new()
 var _fists := {}  # side -> MeshInstance3D
 var _arms := {}  # side -> MeshInstance3D
@@ -30,7 +33,9 @@ var _t := 0.0
 
 
 func _ready() -> void:
-	add_child(_body)
+	add_child(_rig)
+	_rig.scale = Vector3.ONE * SIZE
+	_rig.add_child(_body)
 	_skin = _mat(Color(0.93, 0.93, 1.0), 0.0)
 	var pink := _mat(Color(1.0, 0.62, 0.82), 0.0)
 	var eye := _mat(Color(1.0, 0.95, 0.5), 2.2)
@@ -48,8 +53,8 @@ func _ready() -> void:
 	ant.rotation_degrees.z = 8
 	_part(_sphere(5), eye, Vector3(2, 224, 0))
 	for side in [-1, 1]:
-		_fists[side] = _part(_sphere(15), pink, Vector3.ZERO, self)
-		_arms[side] = _part(_capsule(9, 1.0), _skin, Vector3.ZERO, self)
+		_fists[side] = _part(_sphere(15), pink, Vector3.ZERO, _rig)
+		_arms[side] = _part(_capsule(9, 1.0), _skin, Vector3.ZERO, _rig)
 
 
 func _mat(c: Color, glow: float) -> StandardMaterial3D:
@@ -90,11 +95,15 @@ func _part(mesh: Mesh, mat: Material, pos: Vector3, parent: Node = null) -> Mesh
 
 ## Points in world space for hit tests (main.gd projects them to the screen).
 func chest() -> Vector3:
-	return global_transform * Vector3(0, 120 * (1.0 - squash * 0.6), 0)
+	return _rig.global_transform * Vector3(0, 120 * (1.0 - squash * 0.6), 0)
 
 
 func head() -> Vector3:
-	return global_transform * Vector3(0, 180 * (1.0 - squash * 0.6), 0)
+	return _rig.global_transform * Vector3(0, 180 * (1.0 - squash * 0.6), 0)
+
+
+func hip() -> Vector3:
+	return _rig.global_transform * Vector3(0, 60 * (1.0 - squash * 0.6), 0)
 
 
 func fist_position(side: int) -> Vector3:
@@ -132,6 +141,23 @@ func tick(dt: float, camera_right: Vector3) -> bool:
 	var sink := 0.35 if stunned else 0.0
 	_body.position.y = -HEIGHT * sink + sin(_t * 4.0) * 3.0 * (0.0 if stunned else 1.0)
 	_body.rotation.z = sin(_t * 9.0) * 0.06 if stunned else 0.0
+	var twist := 0.0
+	var lean := 0.0
+	match phase:
+		Phase.WINDUP:  # rear way back, shoulders turned away
+			var u := ease(phase_t / WINDUP_TIME, 0.6)
+			twist = punch_side * 0.55 * u
+			lean = -0.18 * u
+		Phase.STRIKE:
+			var u := phase_t / STRIKE_TIME
+			twist = lerpf(punch_side * 0.55, -punch_side * 0.35, u)
+			lean = lerpf(-0.18, 0.12, u)
+		Phase.RECOVER:
+			var u := phase_t / RECOVER_TIME
+			twist = lerpf(-punch_side * 0.35, 0.0, u)
+			lean = lerpf(0.12, 0.0, u)
+	_body.rotation.y = twist
+	_body.rotation.x = lean
 	_body.scale = Vector3(1.0 + squash * 0.7, 1.0 - squash * 0.6, 1.0 + squash * 0.7)
 	_body.position.x = sin(_t * 70.0) * 4.0 * hurt
 	var flash := Color(1.0, 0.55, 0.55) if hurt > 0.0 else Color(0.93, 0.93, 1.0)
@@ -139,16 +165,18 @@ func tick(dt: float, camera_right: Vector3) -> bool:
 	_lamp.albedo_color = Color(1.0, 0.3, 0.35) if hp < 30.0 and fmod(_t, 0.5) < 0.25 else Color(0.5, 0.85, 1.0)
 	_lamp.emission = _lamp.albedo_color
 	for side in [-1, 1]:
-		var shoulder := global_transform * Vector3(-side * 38.0, (150.0 - HEIGHT * sink) * (1.0 - squash * 0.6), -5.0)
-		var guard := global_transform * Vector3(-side * 26.0, (112.0 - HEIGHT * sink) * (1.0 - squash * 0.6), -45.0)
+		var xf := _rig.global_transform
+		var k := 1.0 - squash * 0.6
+		var shoulder := xf * Vector3(-side * 38.0, (150.0 - HEIGHT * sink) * k, -5.0)
+		var guard := xf * Vector3(-side * 26.0, (112.0 - HEIGHT * sink) * k, -45.0)
+		var pulled := xf * Vector3(-side * 70.0, (195.0 - HEIGHT * sink) * k, 75.0)  # cocked way back
 		var fist := guard
 		if side == punch_side:
 			match phase:
-				Phase.WINDUP:  # pull back and shake
-					var u := phase_t / WINDUP_TIME
-					fist = guard.lerp(shoulder, u * 0.6) + camera_right * sin(_t * 40.0) * 2.0 * u
+				Phase.WINDUP:  # haul the fist back over the shoulder, trembling
+					var u := ease(phase_t / WINDUP_TIME, 0.5)
+					fist = guard.lerp(pulled, u) + camera_right * sin(_t * 40.0) * 5.0 * u
 				Phase.STRIKE:
-					var pulled := guard.lerp(shoulder, 0.6)
 					fist = pulled.lerp(punch_target, ease(phase_t / STRIKE_TIME, 0.5))
 				Phase.RECOVER:
 					fist = punch_target.lerp(guard, ease(phase_t / RECOVER_TIME, 0.4))
@@ -163,4 +191,4 @@ func _place_arm(arm: MeshInstance3D, a: Vector3, b: Vector3) -> void:
 	var up := (b - a).normalized()
 	var side := up.cross(Vector3.FORWARD if absf(up.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT).normalized()
 	var fwd := side.cross(up)
-	arm.global_transform = Transform3D(Basis(side, up * length / 18.0, fwd), mid)
+	arm.global_transform = Transform3D(Basis(side * SIZE, up * length / 18.0, fwd * SIZE), mid)
