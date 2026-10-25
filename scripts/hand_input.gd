@@ -10,6 +10,8 @@ class Hand:
 	var size := 100.0  # wrist -> middle MCP in pixels
 	var openness := 1.0  # 0 = fist, 1 = open palm
 	var vel := Vector2.ZERO  # screen heights per second
+	var grow := 0.0  # relative hand-size change per second (> 0 = moving towards the screen)
+	var close_speed := 0.0  # how fast the hand is closing (openness lost per second)
 	var seen := 0.0  # seconds continuously tracked
 
 const FINGERS := [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]
@@ -40,10 +42,19 @@ var _is_web := OS.has_feature("web")
 var _last_stamp := -1.0
 var _mouse_open := 1.0
 var _last_cam_time := 0.0
+var _clock := 0.0
+## Test hook: when set, used instead of window.kaijuHands (same JSON format).
+var injected := ""
+var _mouse_slap := 0.0
 
 
 func _process(dt: float) -> void:
 	var size := get_viewport().get_visible_rect().size
+	_clock += dt
+	if injected != "":
+		source = "camera"
+		_read_camera(dt, size, injected)
+		return
 	if _is_web:
 		_status_timer -= dt
 		if _status_timer <= 0.0:
@@ -51,14 +62,13 @@ func _process(dt: float) -> void:
 			status = str(JavaScriptBridge.eval("window.kaijuStatus || ''", true))
 		if status == "ready":
 			source = "camera"
-			_read_camera(dt, size)
+			_read_camera(dt, size, str(JavaScriptBridge.eval("window.kaijuHands || ''", true)))
 			return
 	source = "mouse"
 	_read_mouse(dt, size)
 
 
-func _read_camera(dt: float, size: Vector2) -> void:
-	var raw := str(JavaScriptBridge.eval("window.kaijuHands || ''", true))
+func _read_camera(dt: float, size: Vector2, raw: String) -> void:
 	if raw.is_empty():
 		_age(dt)
 		return
@@ -69,7 +79,7 @@ func _read_camera(dt: float, size: Vector2) -> void:
 		_age(dt)
 		return
 	_last_stamp = data["t"]
-	var now := Time.get_ticks_msec() / 1000.0
+	var now := _clock
 	var cam_dt := clampf(now - _last_cam_time, 0.01, 0.2)
 	_last_cam_time = now
 	var found := []
@@ -115,9 +125,16 @@ func _age(dt: float) -> void:
 
 func _read_mouse(dt: float, size: Vector2) -> void:
 	var m := get_viewport().get_mouse_position()
-	var target := 0.0 if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) else 1.0
-	_mouse_open = move_toward(_mouse_open, target, dt * 6.0)
+	# left button closes slowly (グジュー), space closes in a snap (サクッ)
+	var quick := Input.is_key_pressed(KEY_SPACE)
+	var closing := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or quick
+	_mouse_open = move_toward(_mouse_open, 0.0 if closing else 1.0, dt * (14.0 if quick or not closing else 1.1))
 	var hand_size := size.y * 0.2
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		_mouse_slap = minf(_mouse_slap + dt * 6.0, 1.0)
+	else:
+		_mouse_slap = maxf(_mouse_slap - dt * 4.0, 0.0)
+	hand_size *= 1.0 + _mouse_slap * 0.8
 	var two := Input.is_key_pressed(KEY_SHIFT)
 	var spread := Input.is_key_pressed(KEY_CTRL)
 	var gap := size.y * (0.12 if spread else 0.2)
@@ -152,10 +169,15 @@ func _update_hand(side: int, pts: PackedVector2Array, openness: float, dt: float
 		hands[side] = h
 	var a := clampf(smooth, 0.0, 1.0)
 	var new_vel := (palm - h.palm) / size.y / maxf(dt, 1e-3)
+	var new_size := pts[0].distance_to(pts[9])
+	var dt_safe := maxf(dt, 1e-3)
+	var new_open := lerpf(h.openness, openness, a)
 	if h.seen > 0.0:
 		h.vel = h.vel.lerp(new_vel, a)
+		h.grow = lerpf(h.grow, (new_size - h.size) / maxf(h.size, 1.0) / dt_safe, a)
+		h.close_speed = lerpf(h.close_speed, (h.openness - new_open) / dt_safe, a)
 	h.palm = h.palm.lerp(palm, a)
-	h.openness = lerpf(h.openness, openness, a)
+	h.openness = new_open
 	h.pts = pts
-	h.size = pts[0].distance_to(pts[9])
+	h.size = new_size
 	h.seen += dt

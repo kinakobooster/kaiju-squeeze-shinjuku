@@ -198,13 +198,13 @@ func _build_ground(data: Dictionary) -> void:
 	plane.size = Vector2(6000, 6000)
 	ground.mesh = plane
 	var gm := StandardMaterial3D.new()
-	gm.albedo_color = Color(0.16, 0.16, 0.18)
+	gm.albedo_color = Color(0.24, 0.19, 0.3)
 	gm.roughness = 1.0
 	ground.material_override = gm
 	add_child(ground)
 	_add_flat_polys(data["parks"], 0.04, Color(0.16, 0.3, 0.14))
 	_add_flat_polys(data["water"], 0.05, Color(0.12, 0.22, 0.35))
-	_add_ribbons(data["roads"], 0.08, Color(0.27, 0.27, 0.29), Color(0.5, 0.45, 0.3))
+	_add_ribbons(data["roads"], 0.08, Color(0.33, 0.29, 0.38), Color(0.95, 0.8, 0.4))
 	var rails := []
 	for r in data["rails"]:
 		rails.append({"w": 7.0, "p": r["p"]})

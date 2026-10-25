@@ -108,24 +108,27 @@ def make_loop(sec=3.0):
     total = n + xf
     noise = rng.normal(0, 1, total)
     # Two moving formants make it sound like a mouth/slime rather than wind.
-    f1 = 380 + 220 * smooth_noise(total, 3.0)
-    f2 = 900 + 500 * smooth_noise(total, 4.5)
-    wet = svf_bp(noise, f1, 7.0) * 0.9 + svf_bp(noise, f2, 9.0) * 0.5
+    f1 = 650 + 300 * smooth_noise(total, 3.5)
+    f2 = 1700 + 600 * smooth_noise(total, 5.0)
+    wet = svf_bp(noise, f1, 8.0) * 0.8 + svf_bp(noise, f2, 10.0) * 0.6
     wet *= 0.6 + 0.4 * np.abs(smooth_noise(total, 6.0))
     # Grains: sticky strands pulling apart.
     grains = np.zeros(total)
     pos = 0
     while pos < total - SR // 5:
-        g = squelch_grain(rng.uniform(0.05, 0.16), rng.uniform(900, 1800), rng.uniform(180, 400))
+        g = squelch_grain(rng.uniform(0.04, 0.12), rng.uniform(1800, 3500), rng.uniform(400, 900))
         grains[pos:pos + len(g)] += g * rng.uniform(0.4, 1.0)
-        pos += int(rng.uniform(0.03, 0.11) * SR)
+        if rng.uniform() < 0.35:  # juicy droplet
+            pp = pop(rng.uniform(0.02, 0.04), rng.uniform(500, 900), rng.uniform(1500, 2800))
+            grains[pos:pos + len(pp)] += pp * 0.3
+        pos += int(rng.uniform(0.025, 0.08) * SR)
     # Concrete groan: jittery low saw, heavily low-passed.
     t = np.arange(total) / SR
     fg = 48 + 10 * smooth_noise(total, 1.3) + 4 * smooth_noise(total, 17)
     saw = 2 * ((np.cumsum(fg) / SR) % 1.0) - 1
     groan = onepole_lp(saw, 220) * (0.6 + 0.4 * smooth_noise(total, 2.0))
     sub = np.sin(2 * np.pi * np.cumsum(32 + 3 * smooth_noise(total, 0.7)) / SR)
-    x = wet * 0.55 + grains * 0.9 + groan * 0.55 + sub * 0.25
+    x = wet * 0.55 + grains * 1.0 + groan * 0.2 + sub * 0.15
     x = soft_clip(normalize(x, 1.0), 1.8)
     # Crossfade tail into head for a seamless loop.
     fade = np.linspace(0, 1, xf)
@@ -170,6 +173,38 @@ def make_burst(sec=2.2):
     return normalize(soft_clip(normalize(x, 1.0), 2.0), 0.95)
 
 
+def make_snap(sec=0.32):
+    """'サクッ' fresh crunch: dense fibrous crackle (like biting an apple) + short juicy spray."""
+    n = int(SR * sec)
+    t = np.arange(n) / SR
+    x = np.zeros(n)
+    pos = 0
+    while pos < n - 400:
+        m = int(rng.uniform(0.0008, 0.003) * SR)
+        click = rng.normal(0, 1, m) * np.exp(-np.linspace(0, 8, m))
+        x[pos:pos + m] += click * rng.uniform(0.4, 1.0) * np.exp(-pos / SR * 14)
+        pos += int(rng.exponential(0.0035) * SR) + 1
+    crisp = x - onepole_lp(x, 2500)
+    body = svf_bp(x, 900.0, 3.0) * 1.5
+    spray = svf_bp(rng.normal(0, 1, n), 5200 * np.exp(-t * 5) + 1500, 2.0) * np.exp(-t * 11) * 0.5
+    return normalize(soft_clip(crisp + body + spray, 1.4), 0.9)
+
+
+def make_squirt(sec=0.5):
+    """Juice spraying out: band-passed hiss sweeping down plus bright droplets."""
+    n = int(SR * sec)
+    t = np.arange(n) / SR
+    hiss = svf_bp(rng.normal(0, 1, n), 4500 * np.exp(-t * 3.5) + 1100, 3.0)
+    hiss *= np.clip(t * 120, 0, 1) * np.exp(-t * 6)
+    drops = np.zeros(n)
+    pos = int(0.02 * SR)
+    while pos < n - SR // 20:
+        pp = pop(rng.uniform(0.015, 0.035), rng.uniform(600, 1200), rng.uniform(1800, 3200))
+        drops[pos:pos + len(pp)] += pp * rng.uniform(0.2, 0.6) * np.exp(-pos / SR * 4)
+        pos += int(rng.exponential(0.03) * SR) + 100
+    return normalize(hiss + drops * 0.7, 0.85)
+
+
 def make_thud(sec=0.6):
     """Giant palm slapping the ground while crawling."""
     t = t_of(sec)
@@ -207,6 +242,10 @@ def main():
         save(f"crack{i}", make_crack(rng.uniform(0.25, 0.45)))
     save("burst", make_burst())
     save("thud", make_thud())
+    for i in range(3):
+        save(f"snap{i}", make_snap(rng.uniform(0.25, 0.4)))
+    for i in range(2):
+        save(f"squirt{i}", make_squirt(rng.uniform(0.4, 0.6)))
     save("select", make_select())
     save("ambience", make_ambience())
 
