@@ -21,6 +21,8 @@ var phase_t := 0.0
 var punch_side := 1  # +1 = its fist on our right side of the screen
 var punch_target := Vector3.ZERO  # world point the fist flies to (just in front of the camera)
 var next_punch := 2.5
+var windup := WINDUP_TIME  # this punch's wind-up (combo follow-ups are quicker)
+var combo := false  # the next punch is the second half of a one-two
 var hurt := 0.0  # flash when hit
 
 var _rig := Node3D.new()
@@ -110,9 +112,10 @@ func fist_position(side: int) -> Vector3:
 	return _fists[side].global_position
 
 
-func start_punch(target: Vector3, side: int) -> void:
+func start_punch(target: Vector3, side: int, windup_time := WINDUP_TIME) -> void:
 	punch_side = side
 	punch_target = target
+	windup = windup_time
 	phase = Phase.WINDUP
 	phase_t = 0.0
 
@@ -125,7 +128,7 @@ func tick(dt: float, camera_right: Vector3) -> bool:
 	var impact := false
 	match phase:
 		Phase.WINDUP:
-			if phase_t >= WINDUP_TIME:
+			if phase_t >= windup:
 				phase = Phase.STRIKE
 				phase_t = 0.0
 		Phase.STRIKE:
@@ -145,7 +148,7 @@ func tick(dt: float, camera_right: Vector3) -> bool:
 	var lean := 0.0
 	match phase:
 		Phase.WINDUP:  # rear way back, shoulders turned away
-			var u := ease(phase_t / WINDUP_TIME, 0.6)
+			var u := ease(phase_t / windup, 0.6)
 			twist = punch_side * 0.55 * u
 			lean = -0.18 * u
 		Phase.STRIKE:
@@ -174,7 +177,7 @@ func tick(dt: float, camera_right: Vector3) -> bool:
 		if side == punch_side:
 			match phase:
 				Phase.WINDUP:  # haul the fist back over the shoulder, trembling
-					var u := ease(phase_t / WINDUP_TIME, 0.5)
+					var u := ease(phase_t / windup, 0.5)
 					fist = guard.lerp(pulled, u) + camera_right * sin(_t * 40.0) * 5.0 * u
 				Phase.STRIKE:
 					fist = pulled.lerp(punch_target, ease(phase_t / STRIKE_TIME, 0.5))

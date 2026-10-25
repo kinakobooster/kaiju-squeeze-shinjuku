@@ -1,6 +1,6 @@
 // Kaiju shadow projected straight down onto anything (ground, roofs, walls).
 // Positions come from global shader parameters set every frame by main.gd.
-global uniform vec4 kaiju_body;  // x, z, yaw, size (eye height)
+global uniform vec4 kaiju_body;  // x, z, claw length factor, size (eye height)
 global uniform vec4 kaiju_hand_l;  // x, z, size (0 = hidden), openness
 global uniform vec4 kaiju_hand_r;
 global uniform float kaiju_yaw;
@@ -37,7 +37,7 @@ float ks_hand(vec2 p, float open) {
 		vec2 base = dir * 0.24;
 		vec2 tip = base + dir * len;
 		d = min(d, ks_capsule(p, base, tip, 0.075));
-		d = min(d, ks_capsule(p, tip, tip + dir * 0.13, 0.022));  // claw
+		d = min(d, ks_capsule(p, tip, tip + dir * 0.13 * kaiju_body.z, 0.022));  // claw
 	}
 	d = min(d, ks_capsule(p, vec2(-0.2, 0.05), vec2(-0.2, 0.05) + vec2(-0.85, 0.4) * len * 0.8, 0.07));
 	d = min(d, ks_capsule(p, vec2(0.0, -0.1), vec2(0.0, -1.6), 0.2));  // arm reaching back to us

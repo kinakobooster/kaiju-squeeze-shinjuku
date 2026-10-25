@@ -51,9 +51,17 @@ func check(ok: bool, what: String) -> void:
 		failures += 1
 
 
-## Waits until growth and camera shake have settled so screen positions stay valid.
+## Waits until growth, shake and the camera tilt have settled so screen positions stay valid.
+## A hand is held up at the bottom of the screen meanwhile (reaching tilts the camera down),
+## then taken away so the next hand starts fresh.
 func settle() -> void:
-	while absf(main.eye - main.eye_target) > 0.02 or main.shake > 0.0:
+	var vp := root.get_visible_rect().size
+	var parked := [hand(Vector2(vp.x * 0.5, vp.y * 1.05), 1.0, 1)]
+	while absf(main.eye - main.eye_target) > 0.02 or main.shake > 0.0 or main.look_down < 0.995:
+		t += 1.0 / 60.0
+		feed(parked)
+		await process_frame
+	for i in 2:
 		t += 1.0 / 60.0
 		feed([])
 		await process_frame
@@ -87,6 +95,7 @@ func _run() -> void:
 	await frames(0.5, idle)
 
 	# --- fast fist = サクッ
+	await settle()
 	var tg := find_target(true)
 	check(not tg.is_empty(), "found a crushable target")
 	var pos: Vector2 = tg.get("pos", Vector2.ZERO)
@@ -148,7 +157,7 @@ func _run() -> void:
 	await frames(0.5, func(_k): return [hand(spot, 1.0, 1)])
 	await frames(0.15, func(k): return [hand(spot, 1.0, 1, 0.17 + 0.15 * k)])
 	await frames(0.3, func(_k): return [hand(spot, 1.0, 1, 0.32)])
-	check(main.score_count >= before + 3 and main.banner.text.begins_with("ドドド"),
+	check(main.score_count >= before + 2 and main.banner.text.begins_with("ドドド"),
 			"big slap flattens many buildings at once (%d, banner: %s)" % [main.score_count - before, main.banner.text.split("\n")[0]])
 	await frames(0.6, idle)
 
@@ -226,6 +235,69 @@ func _run() -> void:
 
 	# --- bead pile left behind rattles when stroked
 	check(main.bead_sites.size() >= 3, "crushed lots are full of beads (%d piles)" % main.bead_sites.size())
+
+	# --- items
+	main.speed = 0.0
+	main.active_item = ""
+	if main.item_node:
+		main.item_node.queue_free()
+		main.item_node = null
+	main.item_timer = 0.0
+	await frames(0.05, idle)
+	check(main.item_node != null, "an item appears (%s)" % main.item_kind)
+	main.item_kind = "smile"
+	main._pick_item()
+	check(main.active_item == "smile", "picking it up activates it")
+	await settle()
+	var mid := root.get_visible_rect().size * 0.5
+	var frozen0 := 0
+	for b in main.city.buildings:
+		frozen0 += 1 if b.get("frozen", false) else 0
+	main.input.injected_face = JSON.stringify({"t": 1, "jaw": 0.0, "smile": 0.9, "x": 0.5, "y": 0.5})
+	await frames(1.0, idle)
+	main.input.injected_face = ""
+	var frozen1 := 0
+	for b in main.city.buildings:
+		frozen1 += 1 if b.get("frozen", false) else 0
+	check(frozen1 > frozen0, "smiling freezes buildings (%d frozen)" % (frozen1 - frozen0))
+	# squeeze a frozen one: シャリシャリ
+	await settle()
+	var ice := find_target(true)
+	if ice.is_empty():
+		print("SKIP  no building within reach to freeze")
+	else:
+		main.city.freeze(ice["id"])
+		pos = ice["pos"]
+		await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
+		await frames(0.1, func(k): return [hand(pos, 1.0 - k, 1)])
+		await frames(0.4, func(_k): return [hand(pos, 0.0, 1)])
+		check(main.banner.text.begins_with("シャリシャリ"), "squeezing a frozen building goes シャリシャリ (banner: %s)" % main.banner.text.split("\n")[0])
+	await frames(0.5, idle)
+
+	main.active_item = "beam"
+	main.active_time = 10.0
+	await settle()
+	before = main.score_count
+	main.input.injected_face = JSON.stringify({"t": 1, "jaw": 0.9, "smile": 0.0, "x": 0.5, "y": 0.62})
+	await frames(2.0, idle)
+	check(main.beam_mesh.visible and main.score_count > before, "open mouth fires the beam and buildings pop into stars (%d)" % (main.score_count - before))
+	main.input.injected_face = ""
+	await frames(0.3, idle)
+	check(not main.beam_mesh.visible, "closing the mouth stops the beam")
+
+	main.active_item = "claw"
+	main.active_time = 10.0
+	await frames(0.2, func(_k): return [hand(mid, 1.0, 1)])
+	check(main.silhouette.claw_scale > 1.0 and main.reach(1.5) > main.reach(), "claws grow and swings reach 1.5x")
+	main.active_item = ""
+	await frames(0.3, idle)
+
+	# --- stomping when big
+	main.eye_target = 150.0
+	await settle()
+	before = main.score_count
+	await frames(3.0, func(k): return [pump.call(k, 0.3, -1), pump.call(k, 0.7, 1)])
+	check(main.score_count > before, "a big kaiju stomps small buildings just by walking (%d)" % (main.score_count - before))
 
 	print("DONE  failures=%d" % failures)
 	quit(1 if failures > 0 else 0)

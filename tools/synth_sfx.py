@@ -224,6 +224,87 @@ def make_beads(sec=0.5):
     return normalize(x + roll, 0.75)
 
 
+def bell(f, sec, decay):
+    t = t_of(sec)
+    return (np.sin(2 * np.pi * f * t) + 0.4 * np.sin(2 * np.pi * f * 2.76 * t)) * np.exp(-t * decay)
+
+
+def make_beam_loop(sec=1.6):
+    """Cute power beam: detuned saw chord with a fast shimmer and an airy hiss. Loopable."""
+    n = int(SR * sec)
+    t = np.arange(n) / SR
+    x = np.zeros(n)
+    for f in (220.0, 277.2, 329.6, 440.0):  # A major, whole number of cycles per loop
+        f = round(f * sec) / sec
+        for det in (-0.4, 0.4):
+            ff = f + det / sec
+            x += 2 * ((ff * t) % 1.0) - 1
+    x = onepole_lp(x, 2500) * (0.75 + 0.25 * np.sin(2 * np.pi * (24 / sec) * t))
+    hiss = rng.normal(0, 1, n)
+    hiss = (hiss - onepole_lp(hiss, 4000)) * 0.15
+    y = normalize(x, 1.0) + hiss
+    fade = int(SR * 0.05)  # tiny seam smoothing
+    y[:fade] *= np.linspace(0.5, 1, fade)
+    y[-fade:] *= np.linspace(1, 0.5, fade)
+    return normalize(y, 0.7)
+
+
+def make_star_pop(sec=0.5):
+    """A building turning into stars: bright upward sparkle of bells."""
+    n = int(SR * sec)
+    x = np.zeros(n)
+    base = rng.uniform(900, 1300)
+    for i, ratio in enumerate((1.0, 1.25, 1.5, 2.0, 2.5, 3.0)):
+        start = int(i * 0.035 * SR)
+        b = bell(base * ratio, sec, rng.uniform(9, 14))
+        x[start:] += b[: n - start] * (1.0 - i * 0.1)
+    thump = np.sin(2 * np.pi * 120 * t_of(sec)) * np.exp(-t_of(sec) * 25)
+    return normalize(x + thump * 0.6, 0.85)
+
+
+def make_shari_loop(sec=2.0):
+    """'きらきらしゃりしゃり': crushed ice crunching with glassy glints. Loopable."""
+    n = int(SR * sec)
+    xf = int(SR * 0.2)
+    total = n + xf
+    x = np.zeros(total)
+    pos = 0
+    while pos < total - 400:
+        m = int(rng.uniform(0.001, 0.004) * SR)
+        g = rng.normal(0, 1, m) * np.exp(-np.linspace(0, 7, m))
+        x[pos:pos + m] += g * rng.uniform(0.2, 1.0)
+        if rng.uniform() < 0.06:  # a glint of a crystal
+            b = bell(rng.uniform(2500, 6000), 0.12, 40)
+            x[pos:pos + len(b)] += b[: total - pos] * 0.25
+        pos += int(rng.exponential(0.006) * SR) + 1
+    x = x - onepole_lp(x, 1800)
+    fade = np.linspace(0, 1, xf)
+    head = x[:xf] * fade + x[n:n + xf] * (1 - fade)
+    return normalize(np.concatenate([head, x[xf:n]]), 0.75)
+
+
+def make_ice_burst(sec=1.2):
+    """Frozen building shattering: crunch, then a shower of glassy pings."""
+    n = int(SR * sec)
+    t = np.arange(n) / SR
+    x = np.zeros(n)
+    crunch = make_crack(0.3)
+    x[:len(crunch)] += crunch
+    pos = int(0.03 * SR)
+    while pos < n - SR // 10:
+        b = bell(rng.uniform(2000, 7000), 0.25, rng.uniform(15, 30))
+        dens = np.exp(-pos / SR * 2.5)
+        x[pos:pos + len(b)] += b[: n - pos] * rng.uniform(0.2, 0.6) * dens
+        pos += int(rng.exponential(0.02 / dens) * SR) + 50
+    return normalize(x, 0.9)
+
+
+def make_freeze(sec=0.7):
+    """'カチーン': a cold high chime."""
+    x = bell(1760, sec, 6) + bell(2637, sec, 8) * 0.6 + bell(3520, sec, 10) * 0.3
+    return normalize(x, 0.7)
+
+
 def make_thud(sec=0.6):
     """Giant palm slapping the ground while crawling."""
     t = t_of(sec)
@@ -267,6 +348,12 @@ def main():
         save(f"squirt{i}", make_squirt(rng.uniform(0.4, 0.6)))
     for i in range(3):
         save(f"beads{i}", make_beads(rng.uniform(0.4, 0.65)))
+    save("beam_loop", make_beam_loop())
+    for i in range(3):
+        save(f"star_pop{i}", make_star_pop())
+    save("shari_loop", make_shari_loop())
+    save("ice_burst", make_ice_burst())
+    save("freeze", make_freeze())
     save("select", make_select())
     save("ambience", make_ambience())
 

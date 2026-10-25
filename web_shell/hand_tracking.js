@@ -2,6 +2,7 @@
 // MediaPipe Hand Landmarker runs here in JS; Godot polls window.kaijuHands every frame
 // via JavaScriptBridge (21 landmarks per hand, normalized to the *unmirrored* video).
 import {
+  FaceLandmarker,
   FilesetResolver,
   HandLandmarker,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
@@ -9,9 +10,13 @@ import {
 const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 const MODEL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const FACE_MODEL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
 window.kaijuStatus = "loading";
 window.kaijuHands = "";
+// Face for the items: mouth open (beam), smile (freeze) and nose position (aiming).
+window.kaijuFace = "";
 window.kaijuTogglePreview = () => {
   video.style.display = video.style.display === "none" ? "block" : "none";
 };
@@ -66,7 +71,22 @@ async function main() {
   }
   window.kaijuStatus = "ready";
 
+  // The face model is optional: the game works without it, items just won't trigger.
+  let face = null;
+  FilesetResolver.forVisionTasks(WASM)
+    .then((fileset) =>
+      FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: FACE_MODEL, delegate: "GPU" },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: true,
+      })
+    )
+    .then((f) => (face = f))
+    .catch(() => {});
+
   let lastTime = -1;
+  let frame = 0;
   const loop = () => {
     if (video.readyState >= 2 && video.currentTime !== lastTime) {
       lastTime = video.currentTime;
@@ -80,6 +100,24 @@ async function main() {
         hands.push({ p, label: h ? h.categoryName : "", score: h ? h.score : 0 });
       }
       window.kaijuHands = JSON.stringify({ t: performance.now(), hands });
+      // faces change slowly; every other frame is plenty
+      if (face && frame++ % 2 === 0) {
+        const fr = face.detectForVideo(video, performance.now());
+        if (fr.faceLandmarks.length > 0) {
+          const shapes = {};
+          for (const c of fr.faceBlendshapes[0].categories) shapes[c.categoryName] = c.score;
+          const nose = fr.faceLandmarks[0][1];
+          window.kaijuFace = JSON.stringify({
+            t: performance.now(),
+            jaw: +(shapes.jawOpen || 0).toFixed(3),
+            smile: +(((shapes.mouthSmileLeft || 0) + (shapes.mouthSmileRight || 0)) / 2).toFixed(3),
+            x: +nose.x.toFixed(4),
+            y: +nose.y.toFixed(4),
+          });
+        } else {
+          window.kaijuFace = "";
+        }
+      }
     }
     requestAnimationFrame(loop);
   };

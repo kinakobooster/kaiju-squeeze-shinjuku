@@ -49,6 +49,8 @@ const LIKE := [
 ]
 
 var hands := {}  # side -> Hand
+## Face for the items: {seen: bool, jaw: 0..1 mouth open, smile: 0..1, pos: nose on screen (px)}
+var face := {"seen": false, "jaw": 0.0, "smile": 0.0, "pos": Vector2.ZERO}
 var source := "mouse"  # "camera" or "mouse"
 var status := ""
 var _status_timer := 0.0
@@ -57,8 +59,9 @@ var _last_stamp := -1.0
 var _mouse_open := 1.0
 var _last_cam_time := 0.0
 var _clock := 0.0
-## Test hook: when set, used instead of window.kaijuHands (same JSON format).
+## Test hooks: when set, used instead of window.kaijuHands / window.kaijuFace (same JSON format).
 var injected := ""
+var injected_face := ""
 var _mouse_slap := 0.0
 var _mouse_pinch := 0.0
 
@@ -69,6 +72,7 @@ func _process(dt: float) -> void:
 	if injected != "":
 		source = "camera"
 		_read_camera(dt, size, injected)
+		_read_face(size, injected_face)
 		return
 	if _is_web:
 		_status_timer -= dt
@@ -78,9 +82,14 @@ func _process(dt: float) -> void:
 		if status == "ready":
 			source = "camera"
 			_read_camera(dt, size, str(JavaScriptBridge.eval("window.kaijuHands || ''", true)))
+			_read_face(size, str(JavaScriptBridge.eval("window.kaijuFace || ''", true)))
 			return
 	source = "mouse"
 	_read_mouse(dt, size)
+	face["seen"] = true
+	face["jaw"] = 1.0 if Input.is_key_pressed(KEY_B) else 0.0
+	face["smile"] = 1.0 if Input.is_key_pressed(KEY_F) else 0.0
+	face["pos"] = get_viewport().get_mouse_position()
 
 
 func _read_camera(dt: float, size: Vector2, raw: String) -> void:
@@ -131,6 +140,20 @@ func _read_camera(dt: float, size: Vector2, raw: String) -> void:
 	for side in hands.keys():
 		if not seen_sides.has(side):
 			hands.erase(side)
+
+
+func _read_face(size: Vector2, raw: String) -> void:
+	var data = JSON.parse_string(raw) if raw != "" else null
+	if typeof(data) != TYPE_DICTIONARY:
+		face["seen"] = false
+		face["jaw"] = lerpf(face["jaw"], 0.0, 0.3)
+		face["smile"] = lerpf(face["smile"], 0.0, 0.3)
+		return
+	face["seen"] = true
+	face["jaw"] = lerpf(face["jaw"], float(data["jaw"]), 0.5)
+	face["smile"] = lerpf(face["smile"], float(data["smile"]), 0.5)
+	var p := Vector2((1.0 - float(data["x"])) * size.x, float(data["y"]) * size.y)
+	face["pos"] = p if not face.has("pos") else face["pos"].lerp(p, 0.5)
 
 
 func _age(dt: float) -> void:

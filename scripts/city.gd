@@ -340,6 +340,24 @@ func destroy(id: int) -> void:
 	destroy_many([id])
 
 
+## Turns a building to ice (the smile item): pale blue, and squeezing it goes shari-shari.
+func freeze(id: int) -> void:
+	var b: Dictionary = buildings[id]
+	if b.get("frozen", false) or not b["alive"]:
+		return
+	b["frozen"] = true
+	b["color"] = Color(0.8, 0.95, 1.0)
+	b["juice"] = Color(0.85, 0.97, 1.0)
+	_mesh_cache[id] = _build_arrays(id, b, Vector2.ZERO, 1, 1e9)
+	if _detached.has(id):
+		var mi: MeshInstance3D = _detached[id]
+		var rows := clampi(int(b["h"] / 3.0), 8, 40)
+		mi.mesh = _arrays_to_mesh([_build_arrays(id, b, b["center"], rows, clampf(b["radius"] / 4.0, 2.0, 8.0))])
+		mi.material_override.set_shader_parameter("juice_color", b["juice"])
+	else:
+		_rebuild_chunk(b["chunk"])
+
+
 ## Removes several buildings, rebuilding each affected chunk only once.
 func destroy_many(ids: Array) -> void:
 	var chunks := {}

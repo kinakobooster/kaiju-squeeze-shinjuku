@@ -122,7 +122,7 @@ func _run() -> void:
 	var hits := func(h: float) -> int:
 		var n := 0
 		while h >= main.EYE_MIN:
-			h -= 4.0 + h * 0.06
+			h -= 6.0 + h * 0.1
 			n += 1
 		return n
 	check(hits.call(150.0) >= 3 * hits.call(30.0), "big kaiju survives more punches (30m: %d, 150m: %d)" % [hits.call(30.0), hits.call(150.0)])

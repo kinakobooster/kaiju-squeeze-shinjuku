@@ -10,6 +10,7 @@ const PALM := [0, 1, 2, 5, 9, 13, 17]
 
 var hands: Array = []  # Array[HandInput.Hand]
 var scale_factor := 0.5  # SubViewport resolution / screen resolution
+var claw_scale := 1.0  # the claw item makes the claws much longer
 
 
 ## The big lie: a hand pushed towards the camera grows in the image, but we draw it smaller,
@@ -54,10 +55,10 @@ func _draw() -> void:
 			var tip := pts[chain[-1]]
 			var prev := pts[chain[-2]]
 			var d := (tip - prev).normalized()
-			var cw := w * 0.22
+			var cw := w * 0.22 * (1.0 + (claw_scale - 1.0) * 0.3)
 			var base := tip + d * w * 0.15
 			draw_colored_polygon(PackedVector2Array([
-				base + d.orthogonal() * cw, tip + d * w * 0.95, base - d.orthogonal() * cw]), Color.WHITE)
+				base + d.orthogonal() * cw, tip + d * w * 0.95 * claw_scale, base - d.orthogonal() * cw]), Color.WHITE)
 
 
 func _capsule(a: Vector2, b: Vector2, wa: float, wb: float) -> void:

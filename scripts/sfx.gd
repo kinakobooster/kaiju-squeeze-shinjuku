@@ -24,6 +24,13 @@ var squish_shorts: Array[AudioStream] = [
 	preload("res://audio/samples/slime_squish.mp3"), preload("res://audio/samples/squish_short.mp3")]
 var squish_long: AudioStream = preload("res://audio/samples/squish_long.mp3")
 var layers: Array[AudioStreamPlayer] = []
+# items
+var beam_player: AudioStreamPlayer
+var shari_player: AudioStreamPlayer
+var star_pops: Array[AudioStream] = []
+var ice_burst: AudioStream = preload("res://audio/ice_burst.wav")
+var freeze: AudioStream = preload("res://audio/freeze.wav")
+var frozen := false  # the building being squeezed is frozen: sparkly shari-shari instead of squish
 
 
 func _ready() -> void:
@@ -37,6 +44,10 @@ func _ready() -> void:
 	for i in 3:
 		beads.append(load("res://audio/beads%d.wav" % i))
 	loop_player = _make_loop(preload("res://audio/squeeze_loop.wav"))
+	beam_player = _make_loop(preload("res://audio/beam_loop.wav"))
+	shari_player = _make_loop(preload("res://audio/shari_loop.wav"))
+	for i in 3:
+		star_pops.append(load("res://audio/star_pop%d.wav" % i))
 	for path in ["res://audio/samples/plastic_bottle.mp3", "res://audio/samples/squeeze_long.mp3"]:
 		var mp3: AudioStreamMP3 = load(path).duplicate()
 		mp3.loop = true
@@ -80,23 +91,36 @@ func play(stream: AudioStream, pitch := 1.0, volume_db := 0.0) -> void:
 func update_squeeze(dt: float, active: bool, closing: float, closure: float, size_pitch: float) -> void:
 	var target := clampf(0.15 + closing * 0.9, 0.0, 1.0) if active else 0.0
 	_loop_vol = move_toward(_loop_vol, target, dt * (8.0 if target > _loop_vol else 3.0))
-	if _loop_vol > 0.001:
+	var wet_vol := 0.0 if frozen else _loop_vol
+	if wet_vol > 0.001:
 		if not loop_player.playing:
 			loop_player.play(randf() * 2.5)
-		loop_player.volume_db = linear_to_db(_loop_vol) + 3.0
+		loop_player.volume_db = linear_to_db(wet_vol) + 3.0
 		# pressure building up: the squelch climbs as the building gives way
 		loop_player.pitch_scale = clampf((0.85 + 0.55 * closure) * size_pitch, 0.4, 2.5)
 	elif loop_player.playing:
 		loop_player.stop()
+	var ice_vol := _loop_vol if frozen else 0.0
+	if ice_vol > 0.001:
+		if not shari_player.playing:
+			shari_player.play(randf() * 1.8)
+		shari_player.volume_db = linear_to_db(ice_vol) + 2.0
+		shari_player.pitch_scale = clampf(0.9 + 0.4 * closure, 0.5, 2.0)
+	elif shari_player.playing:
+		shari_player.stop()
 	for lp in layers:
-		if _loop_vol > 0.001:
+		if wet_vol > 0.001:
 			if not lp.playing:  # start somewhere new each grip so it never sounds the same
 				lp.play(randf() * maxf(lp.stream.get_length() - 1.0, 0.0))
-			lp.volume_db = linear_to_db(_loop_vol) - 2.0
+			lp.volume_db = linear_to_db(wet_vol) - 2.0
 			lp.pitch_scale = clampf((0.9 + 0.3 * closure) * size_pitch, 0.5, 2.0)
 		elif lp.playing:
 			lp.stop()
 	if not active:
+		return
+	if frozen:
+		if randf() < (1.0 + 6.0 * closing) * dt:
+			play(freeze, randf_range(1.5, 2.6), randf_range(-16.0, -10.0))
 		return
 	if randf() < (0.3 + 2.5 * closing) * dt:
 		play(squish_shorts.pick_random(), randf_range(0.8, 1.25) * size_pitch, randf_range(-8.0, -3.0))
@@ -140,6 +164,25 @@ func play_slap(size_pitch: float) -> void:
 ## Running a hand through a pile of silver beads.
 func play_beads(intensity: float) -> void:
 	play(beads.pick_random(), randf_range(0.85, 1.2), linear_to_db(clampf(0.4 + intensity * 0.6, 0.2, 1.0)))
+
+
+func play_ice_burst() -> void:
+	stop_squeeze()
+	play(ice_burst, randf_range(0.95, 1.1), 1.0)
+	play(freeze, randf_range(1.2, 1.5), -4.0)
+
+
+func play_star_pop() -> void:
+	play(star_pops.pick_random(), randf_range(0.9, 1.2), -1.0)
+
+
+func set_beam(on: bool, power: float) -> void:
+	if on and not beam_player.playing:
+		beam_player.play()
+	elif not on and beam_player.playing:
+		beam_player.stop()
+	beam_player.volume_db = linear_to_db(clampf(0.4 + power * 0.6, 0.1, 1.0)) - 2.0
+	beam_player.pitch_scale = 0.9 + power * 0.3
 
 
 ## Building too big for us yet.

@@ -29,6 +29,14 @@ const PINCH_SHUT := 0.18  # gap at which the pinched building is crushed
 const AREA_LIMIT := Rect2(-1150, -1050, 2300, 2100)
 const BOSS_TIME := 180.0  # the alien of justice lands after three minutes
 const EYE_MIN := 15.0  # shrink below this and the alien wins
+const ITEMS := {
+	"beam": {"name": "ビーム", "color": Color(1.0, 0.45, 0.8), "time": 15.0,
+			"how": "口を大きく開けるとビーム！ 顔を動かして振り回せ"},
+	"claw": {"name": "クロー", "color": Color(0.8, 0.95, 1.0), "time": 20.0,
+			"how": "爪がのびた！ 腕を振るとリーチ1.5倍"},
+	"smile": {"name": "スマイル", "color": Color(1.0, 0.88, 0.25), "time": 15.0,
+			"how": "笑顔で 真ん中のビルが凍りつく！ 握るとしゃりしゃり"},
+}
 const GUARD_RADIUS := 0.2  # screen heights: an open palm this close to the incoming fist catches it
 
 var city: City
@@ -55,6 +63,19 @@ var shake := 0.0
 var bead_sites: Array[Dictionary] = []  # {center: Vector2, radius, node, cool, bounce}
 var popups: Array[Dictionary] = []  # {text, pos, t}
 var pitch := CAM_PITCH
+var look_down := 0.0  # 0 = looking out over the city, 1 = looking down at our hands
+
+# items
+var item_node: Node3D
+var item_kind := ""
+var item_pos := Vector2.ZERO
+var item_timer := 20.0
+var active_item := ""
+var active_time := 0.0
+var beam_mesh: MeshInstance3D
+var beam_heat := {}  # building id -> seconds under the beam
+var smile_cool := 0.0
+var stomp_cool := 0.0
 
 # boss fight
 var boss: Boss
@@ -110,6 +131,7 @@ func _ready() -> void:
 	city.load_city("res://data/city.json")
 	juice_fx = _make_particles(SphereMesh.new(), 260, Color.WHITE, 6.0)
 	debris_fx = _make_particles(BoxMesh.new(), 140, Color(0.5, 0.5, 0.5), 5.0)
+	_setup_beam()
 	loading.visible = false
 	if OS.has_feature("web"):  # ?boss=10 brings the alien early (for trying the fight)
 		var q := str(JavaScriptBridge.eval("location.search", true))
@@ -123,8 +145,13 @@ func crush_limit() -> float:
 	return eye * CRUSH_RATIO
 
 
-func reach() -> float:
-	return 40.0 + eye * 2.5
+func reach(mult := 1.0) -> float:
+	return (8.0 + eye * 0.25) * mult
+
+
+## Size of a hand's shadow (palm to fingertips is about 0.9 of this).
+func hand_size() -> float:
+	return eye * 0.18
 
 
 # --- setup --------------------------------------------------------------------------------
@@ -165,10 +192,10 @@ func _setup_world() -> void:
 	add_child(sun)
 	add_child(player)
 	# start in Kabukicho among small buildings, facing west towards the Nishi-Shinjuku towers
-	player.position = Vector3(420, 0, -500)
+	player.position = Vector3(352, 0, -484)
 	player.rotation.y = PI * 0.5
 	cam.rotation_degrees.x = CAM_PITCH
-	cam.fov = 72.0
+	cam.fov = 75.0
 	cam.far = 3000.0
 	cam.near = 0.5
 	player.add_child(cam)
@@ -273,7 +300,7 @@ func _setup_ui() -> void:
 	help.text = ("両手でいいねして上下に振る = 前進 ／ 片手のいいねを揺らす = その手の方へ旋回\n"
 			+ "パーで止める = 手の影の下のビルが赤く震える ／ 素早くグー = サクッ！ ／ ゆっくりグー = グジュウ〜 ／ 二本指でつまむ = プチッ！\n"
 			+ "画面に向かって叩く = 手と腕の影の下をまとめてドドド！ ／ 両手で握る or パーで挟む = 両手スクイーズ ／ 潰すほど大きくなる\n"
-			+ "[マウス] 左長押し=握る  Space=素早く握る  Q=つまむ  右=叩く  T=いいね  Shift=両手  WASD=移動  H=ヘルプ")
+			+ "[マウス] 左長押し=握る  Space=素早く握る  Q=つまむ  右=叩く  T=いいね  B=口を開ける  F=笑顔  WASD=移動  H=ヘルプ")
 	banner = _label(top, 54, Vector2.ZERO)
 	banner.add_theme_font_override("font", font_big)
 	banner.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -367,6 +394,7 @@ func _process(dt: float) -> void:
 	_update_relaxing(dt)
 	_update_shadows_and_beads(dt)
 	_update_boss(dt)
+	_update_items(dt)
 	_update_camera(dt)
 	if banner_time > 0.0:
 		banner_time -= dt
@@ -378,7 +406,8 @@ func _process(dt: float) -> void:
 		hint.modulate.a = clampf(hint_time * 2.0, 0.0, 1.0)
 	hud.text = "身長 %dm  ／  つぶせる高さ %dm まで  ／  スクイーズ %d棟" % [int(eye), int(crush_limit()), score_count]
 	if game_state == "play":
-		hud.text += "  ／  宇宙人到着まで %d:%02d" % [int(boss_timer) / 60, int(boss_timer) % 60]
+		hud.text += "  ／  宇宙人まで %d:%02d" % [int(boss_timer) / 60, int(boss_timer) % 60]
+	silhouette.claw_scale = 3.0 if active_item == "claw" else 1.0
 	var hm: ShaderMaterial = hand_rect.material
 	hm.set_shader_parameter("grip_glow", closure if active_id >= 0 else 0.0)
 	ui.queue_redraw()
@@ -419,10 +448,17 @@ func _update_stars(dt: float) -> void:
 		s.rotation.z = sin(t * 0.5 + ph) * 0.35
 
 
+## The building under a screen point, if it is within arm's reach of our body.
 func _ray(screen: Vector2) -> Dictionary:
 	var o := cam.project_ray_origin(screen)
 	var d := cam.project_ray_normal(screen)
-	return city.pick(o, d, reach())
+	var hit := city.pick(o, d, eye * 3.0 + reach() * 2.0)
+	if hit.is_empty():
+		return hit
+	var p: Vector3 = hit["point"]
+	if Vector2(p.x - player.position.x, p.z - player.position.z).length() > reach():
+		return {}
+	return hit
 
 
 func _crushable(id: int) -> bool:
@@ -592,6 +628,9 @@ func _update_movement(dt: float) -> void:
 	var p2 := city.push_out(Vector2(p.x, p.z), eye * 0.75, eye * 0.2)
 	p2.x = clampf(p2.x, AREA_LIMIT.position.x, AREA_LIMIT.end.x)
 	p2.y = clampf(p2.y, AREA_LIMIT.position.y, AREA_LIMIT.end.y)
+	stomp_cool = maxf(stomp_cool - dt, 0.0)
+	if absf(speed) > 3.0 and stomp_cool <= 0.0:
+		_stomp(Vector2(player.position.x, player.position.z), p2)
 	player.position = Vector3(p2.x, 0.0, p2.y)
 
 
@@ -614,6 +653,7 @@ func _begin_squeeze(id: int, hit: Vector3) -> void:
 	size_pitch = _size_pitch(b)
 	var m: ShaderMaterial = active_node.material_override
 	m.set_shader_parameter("grip_y", grip_y)
+	sfx.frozen = b.get("frozen", false)
 
 
 func _end_squeeze() -> void:
@@ -713,7 +753,13 @@ func _update_squeeze(dt: float) -> void:
 func _crush(id: int, at: Vector3, style: String) -> void:
 	var b: Dictionary = city.buildings[id]
 	var pitch := _size_pitch(b)
+	if b.get("frozen", false) and style != "slap":
+		style = "ice"
 	match style:
+		"ice":
+			sfx.play_ice_burst()
+			shake = 0.6
+			banner.text = "シャリシャリ〜ッ!!"
 		"snap":
 			sfx.play_snap(pitch)
 			shake = 0.8
@@ -759,7 +805,7 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 	var bname: String = b["name"] if b["name"] != "" else "名もなきビル"
 	banner.text += "\n%s  %dm" % [bname, int(b["h"])]
 	var before := int(crush_limit())
-	eye_target = minf(eye_target + 0.6 + b["h"] * 0.045, EYE_MAX)
+	eye_target = minf(eye_target + (0.6 + b["h"] * 0.045) * 0.5, EYE_MAX)
 	if int(eye_target * CRUSH_RATIO) / 25 > before / 25:
 		hint.text = "おおきくなった！ %dmのビルまで潰せる！" % int(eye_target * CRUSH_RATIO)
 		hint_time = 2.5
@@ -816,10 +862,10 @@ func _spawn_beads(b: Dictionary) -> void:
 
 ## Where a hand is in the world: under the palm, but never further than the arm reaches.
 ## Its shadow falls there, and whatever building the shadow is on is what the hand acts on.
-func _hand_target(h: HandInput.Hand) -> Dictionary:
+func _hand_target(h: HandInput.Hand, mult := 1.0) -> Dictionary:
 	var o := cam.project_ray_origin(h.palm)
 	var d := cam.project_ray_normal(h.palm)
-	var hit := city.pick(o, d, reach() * 1.5)
+	var hit := city.pick(o, d, eye * 3.0 + reach(mult) * 2.0)  # cast far; reach is applied on the ground
 	var p: Vector3
 	if not hit.is_empty():
 		p = hit["point"]
@@ -829,8 +875,8 @@ func _hand_target(h: HandInput.Hand) -> Dictionary:
 		p = o + Vector3(d.x, 0.0, d.z).normalized() * reach()
 	var flat := Vector2(p.x - player.position.x, p.z - player.position.z)
 	var id: int = hit.get("id", -1)
-	if flat.length() > reach():
-		flat = flat.normalized() * reach()
+	if flat.length() > reach(mult):
+		flat = flat.normalized() * reach(mult)
 		id = -1
 	var q := Vector2(player.position.x, player.position.z) + flat
 	if id < 0:
@@ -843,7 +889,10 @@ func _hand_target(h: HandInput.Hand) -> Dictionary:
 
 ## Slap: every building we can crush under the hand and arm shadow goes at once.
 func _slap(h: HandInput.Hand, c: Dictionary, tg: Dictionary) -> void:
-	var hs := eye * 0.6
+	var claw := 1.5 if active_item == "claw" else 1.0  # long claws: swings reach further
+	if claw > 1.0:
+		tg = _hand_target(h, claw)
+	var hs := hand_size() * claw
 	var w: Vector3 = tg["world"]
 	var a := Vector2(w.x, w.z)
 	var back := (Vector2(player.position.x, player.position.z) - a).normalized()
@@ -880,7 +929,7 @@ func _crush_many(ids: Array[int], at: Vector2) -> void:
 		var b: Dictionary = city.buildings[ids[i]]
 		relaxing.erase(ids[i])
 		_spawn_beads(b)
-		grown += 0.3 + b["h"] * 0.02
+		grown += (0.3 + b["h"] * 0.02) * 0.5
 		if i < 6:  # a few bursts of confetti, not thirty
 			var one: CPUParticles3D = debris_fx.duplicate()
 			add_child(one)
@@ -916,8 +965,9 @@ func _update_shadows_and_beads(dt: float) -> void:
 	# out in front of us and each hand's shadow shows where it can reach
 	var rs := RenderingServer
 	rs.global_shader_parameter_set(&"kaiju_yaw", player.rotation.y)
-	rs.global_shader_parameter_set(&"kaiju_body",
-			Vector4(player.position.x, player.position.z, 0.0, eye))
+	var fwd := -player.global_basis.z
+	rs.global_shader_parameter_set(&"kaiju_body", Vector4(player.position.x - fwd.x * eye * 0.35,
+			player.position.z - fwd.z * eye * 0.35, 2.5 if active_item == "claw" else 1.0, eye))
 	for side in [-1, 1]:
 		var h: HandInput.Hand = input.hands.get(side)
 		var param := &"kaiju_hand_r" if side > 0 else &"kaiju_hand_l"
@@ -925,7 +975,7 @@ func _update_shadows_and_beads(dt: float) -> void:
 			rs.global_shader_parameter_set(param, Vector4(0, 0, 0, 1))
 			continue
 		var w: Vector3 = ctl[side].get("world", Vector3.ZERO)
-		var hs := eye * 0.6
+		var hs := hand_size()
 		rs.global_shader_parameter_set(param, Vector4(w.x, w.z, hs, 0.15 if h.like else h.openness))
 		# stroking a bead pile
 		if h.vel.length() < 0.35:
@@ -963,19 +1013,24 @@ func _update_relaxing(dt: float) -> void:
 func _update_camera(dt: float) -> void:
 	shake = maxf(shake - dt * 2.5, 0.0)
 	var s := shake * shake * 1.5 * clampf(eye / 80.0, 0.4, 1.5)
-	cam.position = Vector3(randf_range(-s, s), eye + randf_range(-s, s), 0)
-	var want := CAM_PITCH
+	var reaching := false
+	for h in input.hands.values():
+		reaching = reaching or not h.like
+	var fighting := boss != null and game_state != "play"
+	look_down = lerpf(look_down, 1.0 if reaching and not fighting else 0.0, 1.0 - exp(-2.5 * dt))
+	cam.position = Vector3(randf_range(-s, s), eye + randf_range(-s, s), eye * 0.3 * look_down)
+	var want := lerpf(CAM_PITCH, -40.0, look_down)
 	if boss != null and game_state != "play":  # look the alien in the chest
 		var flat := Vector2(boss.position.x - player.position.x, boss.position.z - player.position.z).length()
 		want = clampf(rad_to_deg(atan2(boss.chest().y - eye, maxf(flat, 1.0))), CAM_PITCH, 42.0)
-	pitch = lerpf(pitch, want, 1.0 - exp(-3.0 * dt))
+	pitch = lerpf(pitch, want, 1.0 - exp(-3.0 * dt)) if fighting else want
 	cam.rotation_degrees = Vector3(pitch, 0.0, 0.0)
 
 
 # --- boss fight ---------------------------------------------------------------------------
 
 func punch_loss() -> float:
-	return 4.0 + eye_target * 0.06
+	return 6.0 + eye_target * 0.1
 
 
 func _boss_distance() -> float:
@@ -1048,20 +1103,23 @@ func _fight(dt: float) -> void:
 	if boss_landing:
 		return
 	if boss.stunned:
-		banner.text = "握れ！！"
-		banner_time = maxf(banner_time, 1.5)
 		_crush_boss(dt)
 		return
 	if boss.phase == Boss.Phase.IDLE:
 		boss.next_punch -= dt
 		if boss.next_punch <= 0.0:
-			var side := 1 if randf() < 0.5 else -1
+			var combo := boss.combo
+			var side := -boss.punch_side if combo else (1 if randf() < 0.5 else -1)
 			var cb := cam.global_basis
 			var target := cam.global_position - cb.z * (eye * 0.5 + 15.0) + cb.x * side * eye * 0.22 - cb.y * eye * 0.06
-			boss.start_punch(target, side)
-			boss.next_punch = randf_range(1.0, 2.6) * (0.55 + 0.45 * boss.hp / 100.0)
+			boss.start_punch(target, side, 0.65 if combo else Boss.WINDUP_TIME)
+			boss.combo = false
+			boss.next_punch = randf_range(0.6, 1.6) * (0.6 + 0.4 * boss.hp / 100.0)
 	if impact:
 		_resolve_punch()
+		if randf() < 0.4:  # one-two: a quick second punch from the other side
+			boss.combo = true
+			boss.next_punch = 0.2
 
 
 func _punch_spot() -> Vector2:
@@ -1110,20 +1168,24 @@ func _palm_on_boss(p: Vector2) -> bool:
 
 
 func _hit_boss(at: Vector2) -> void:
-	var dmg := 4.0 * eye / 50.0
+	var dmg := 1.6 * eye / 50.0
 	if boss.phase == Boss.Phase.WINDUP:
 		dmg *= 1.5  # counter while it winds up
-	boss.hp = maxf(boss.hp - dmg, 0.0)
-	boss.hurt = 1.0
 	shake = maxf(shake, 0.6)
 	sfx.play_slap(0.8)
 	popups.append({"text": "バチーン！ -%d" % maxi(int(dmg), 1), "pos": at, "t": 0.0})
-	if boss.hp <= 0.0:
+	_damage_boss(dmg)
+
+
+func _damage_boss(dmg: float) -> void:
+	boss.hp = maxf(boss.hp - dmg, 0.0)
+	boss.hurt = 1.0
+	if boss.hp <= 0.0 and not boss.stunned:
 		boss.stunned = true
 		boss.phase = Boss.Phase.IDLE
-		banner.text = "握れ！！"
-		banner_time = 3.0
-		hint.text = "ひざをついた！ 宇宙人の上でパーにしてから ギュッと握れ！"
+		banner.text = "ひざをついた！"
+		banner_time = 2.0
+		hint.text = "宇宙人の上でパーにしてから ギュッと握れ！"
 		hint_time = 6.0
 
 
@@ -1184,6 +1246,246 @@ func _lose() -> void:
 	end_label.visible = true
 
 
+# --- stomping & items ---------------------------------------------------------------------
+
+## Once we are big, walking flattens small buildings underfoot.
+func _stomp(a: Vector2, b: Vector2) -> void:
+	var ids: Array[int] = []
+	for id in city.buildings_in_capsule(a, b, eye * 0.15):
+		if city.effective_height(id) <= eye * 0.3:
+			ids.append(id)
+	if ids.is_empty():
+		return
+	stomp_cool = 0.15
+	for id in ids:
+		_spawn_beads(city.buildings[id])
+		eye_target = minf(eye_target + (0.3 + city.buildings[id]["h"] * 0.02) * 0.5, EYE_MAX)
+		if id == active_id:
+			_end_squeeze()
+	city.destroy_many(ids)
+	score_count += ids.size()
+	sfx.play(sfx.thud, randf_range(0.7, 0.9), -3.0)
+	sfx.play(sfx.snaps.pick_random(), randf_range(0.8, 1.0), -8.0)
+	var vp := get_viewport().get_visible_rect().size
+	popups.append({"text": "ふみっ！" if ids.size() == 1 else "ふみふみっ！ x%d" % ids.size(),
+			"pos": Vector2(vp.x * 0.5 - 60, vp.y * 0.85), "t": 0.0})
+
+
+func _setup_beam() -> void:
+	beam_mesh = MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 1.0
+	cyl.bottom_radius = 1.0
+	cyl.height = 1.0
+	cyl.radial_segments = 12
+	beam_mesh.mesh = cyl
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = Color(1.0, 0.75, 0.95)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color.a = 0.85
+	m.set("disable_fog", true)
+	beam_mesh.material_override = m
+	beam_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	beam_mesh.visible = false
+	add_child(beam_mesh)
+
+
+func _update_items(dt: float) -> void:
+	if game_state == "won" or game_state == "lost":
+		sfx.set_beam(false, 0.0)
+		beam_mesh.visible = false
+		return
+	if item_node == null and active_item == "":
+		item_timer -= dt
+		if item_timer <= 0.0:
+			_spawn_item()
+	elif item_node != null:
+		var t := Time.get_ticks_msec() / 1000.0
+		var ground := 0.0
+		var under := city.building_at(item_pos)
+		if under >= 0:
+			ground = city.effective_height(under)
+		item_node.position = Vector3(item_pos.x, ground + eye * (0.12 + sin(t * 3.0) * 0.03), item_pos.y)
+		item_node.scale = Vector3.ONE * eye
+		item_node.get_child(0).rotation.y += dt * 2.0
+		var me := Vector2(player.position.x, player.position.z)
+		var got := me.distance_to(item_pos) < eye * 0.3
+		for side in [-1, 1]:
+			if input.hands.has(side) and ctl[side].has("world"):
+				var w: Vector3 = ctl[side]["world"]
+				got = got or Vector2(w.x, w.z).distance_to(item_pos) < hand_size() * 0.8
+		if got:
+			_pick_item()
+	if active_item == "":
+		sfx.set_beam(false, 0.0)
+		beam_mesh.visible = false
+		return
+	active_time -= dt
+	if active_time <= 0.0:
+		active_item = ""
+		return
+	match active_item:
+		"beam":
+			_update_beam(dt)
+		"smile":
+			_update_smile(dt)
+
+
+func _spawn_item() -> void:
+	item_kind = ITEMS.keys().pick_random()
+	var info: Dictionary = ITEMS[item_kind]
+	var fwd := Vector2(-player.global_basis.z.x, -player.global_basis.z.z).normalized()
+	item_pos = Vector2(player.position.x, player.position.z) + fwd * eye * 0.55 \
+			+ fwd.orthogonal() * randf_range(-0.2, 0.2) * eye
+	item_node = Node3D.new()
+	var orb := MeshInstance3D.new()
+	orb.mesh = _star_mesh()
+	orb.scale = Vector3.ONE * 0.07
+	var m := StandardMaterial3D.new()
+	m.albedo_color = info["color"]
+	m.emission_enabled = true
+	m.emission = info["color"]
+	m.emission_energy_multiplier = 2.0
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.no_depth_test = true
+	m.set("disable_fog", true)
+	orb.material_override = m
+	item_node.add_child(orb)
+	var label := Label3D.new()
+	label.text = info["name"]
+	label.font = font_big
+	label.font_size = 64
+	label.pixel_size = 0.0012
+	label.position.y = 0.12
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.modulate = info["color"]
+	label.outline_modulate = Color(0.35, 0.05, 0.45)
+	label.outline_size = 16
+	item_node.add_child(label)
+	add_child(item_node)
+	popups.append({"text": "アイテム！", "pos": get_viewport().get_visible_rect().size * Vector2(0.45, 0.5), "t": 0.0})
+	sfx.play_star_pop()
+
+
+func _pick_item() -> void:
+	if item_node == null:
+		return
+	active_item = item_kind
+	var info: Dictionary = ITEMS[active_item]
+	active_time = info["time"]
+	item_node.queue_free()
+	item_node = null
+	item_timer = randf_range(25.0, 40.0)
+	banner.text = "%s ゲット！" % info["name"]
+	banner_time = 2.5
+	hint.text = info["how"]
+	hint_time = 4.0
+	sfx.play_star_pop()
+	sfx.play(sfx.freeze, 1.5, -6.0)
+
+
+## Mouth open = beam from our mouth, aimed by moving the head. Buildings hit pop into stars.
+func _update_beam(dt: float) -> void:
+	var f: Dictionary = input.face
+	var power: float = clampf((f["jaw"] - 0.3) / 0.4, 0.0, 1.0)
+	var on: bool = f["seen"] and power > 0.0
+	sfx.set_beam(on, power)
+	beam_mesh.visible = on
+	if not on:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var c := vp * 0.5
+	var aim: Vector2 = c + (f["pos"] - c) * 2.2  # small head moves sweep the whole view
+	aim = aim.clamp(Vector2.ZERO, vp)
+	var o := cam.project_ray_origin(aim)
+	var d := cam.project_ray_normal(aim)
+	var cb := cam.global_basis
+	var start := cam.global_position - cb.y * eye * 0.06 - cb.z * eye * 0.08
+	var end := o + d * 1500.0
+	if boss != null and game_state == "boss" and not boss.stunned and _palm_on_boss(aim):
+		end = boss.chest()
+		_damage_boss(10.0 * dt)
+	else:
+		var hit := city.pick(o, d, 1500.0)
+		if not hit.is_empty():
+			end = hit["point"]
+			var id: int = hit["id"]
+			beam_heat[id] = beam_heat.get(id, 0.0) + dt
+			if beam_heat[id] > 0.2:
+				_star_burst(id)
+	var axis := end - start
+	var length := maxf(axis.length(), 1.0)
+	var up := axis / length
+	var side := up.cross(Vector3.UP if absf(up.y) < 0.95 else Vector3.RIGHT).normalized()
+	var r := eye * 0.03 * (0.7 + 0.3 * sin(Time.get_ticks_msec() * 0.05)) * (0.5 + power * 0.5)
+	beam_mesh.global_transform = Transform3D(Basis(side * r, up * length, side.cross(up) * r), start + axis * 0.5)
+
+
+func _star_burst(id: int) -> void:
+	var b: Dictionary = city.buildings[id]
+	if id == active_id:
+		_end_squeeze()
+	var stars_fx := CPUParticles3D.new()
+	var mesh := _star_mesh()
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(1.0, 0.88, 0.3)
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.8, 0.2)
+	m.emission_energy_multiplier = 2.0
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh.surface_set_material(0, m)
+	stars_fx.mesh = mesh
+	stars_fx.amount = 40
+	stars_fx.lifetime = 1.8
+	stars_fx.one_shot = true
+	stars_fx.explosiveness = 1.0
+	stars_fx.local_coords = false
+	stars_fx.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	stars_fx.emission_sphere_radius = b["radius"] * 0.6
+	stars_fx.direction = Vector3.UP
+	stars_fx.spread = 70.0
+	stars_fx.initial_velocity_min = 30.0
+	stars_fx.initial_velocity_max = 90.0
+	stars_fx.gravity = Vector3(0, -25, 0)
+	stars_fx.angular_velocity_min = -360.0
+	stars_fx.angular_velocity_max = 360.0
+	var sz := clampf(b["radius"] / 6.0, 1.0, 8.0)
+	stars_fx.scale_amount_min = sz * 0.5
+	stars_fx.scale_amount_max = sz
+	add_child(stars_fx)
+	stars_fx.global_position = Vector3(b["center"].x, b["h"] * 0.5, b["center"].y)
+	stars_fx.emitting = true
+	get_tree().create_timer(2.5).timeout.connect(stars_fx.queue_free)
+	relaxing.erase(id)
+	beam_heat.erase(id)
+	city.destroy(id)
+	score_count += 1
+	eye_target = minf(eye_target + (0.6 + b["h"] * 0.045) * 0.5, EYE_MAX)
+	sfx.play_star_pop()
+	popups.append({"text": "キラーン！", "pos": cam.unproject_position(stars_fx.global_position), "t": 0.0})
+
+
+## Smiling freezes the building in the middle of the view.
+func _update_smile(dt: float) -> void:
+	smile_cool = maxf(smile_cool - dt, 0.0)
+	var f: Dictionary = input.face
+	if not f["seen"] or f["smile"] < 0.5 or smile_cool > 0.0:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var hit := city.pick(cam.project_ray_origin(vp * 0.5), cam.project_ray_normal(vp * 0.5), 900.0)
+	if hit.is_empty():
+		return
+	var id: int = hit["id"]
+	if city.buildings[id].get("frozen", false):
+		return
+	city.freeze(id)
+	smile_cool = 0.35
+	sfx.play(sfx.freeze, randf_range(0.95, 1.1), -2.0)
+	popups.append({"text": "カチーン！", "pos": cam.unproject_position(hit["point"]), "t": 0.0})
+
+
 # --- overlay ------------------------------------------------------------------------------
 
 func _draw_ui() -> void:
@@ -1221,7 +1523,7 @@ func _draw_ui() -> void:
 		var vp := ui.size
 		if boss.phase == Boss.Phase.WINDUP or boss.phase == Boss.Phase.STRIKE:
 			var spot := _punch_spot()
-			var u := clampf(boss.phase_t / Boss.WINDUP_TIME, 0.0, 1.0) if boss.phase == Boss.Phase.WINDUP else 1.0
+			var u := clampf(boss.phase_t / boss.windup, 0.0, 1.0) if boss.phase == Boss.Phase.WINDUP else 1.0
 			var rr := vp.y * GUARD_RADIUS * (1.6 - 0.6 * u)
 			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.03)
 			# a hand-shaped target: put your hand on it to catch the punch
@@ -1232,6 +1534,19 @@ func _draw_ui() -> void:
 			ui.draw_string_outline(font_big, lp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 26, 8, Color(0.4, 0.05, 0.2))
 			ui.draw_string(font_big, lp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color(1.0, 0.85, 0.9))
 		_draw_bar(Vector2(vp.x * 0.5 - 150, 128), "せいぎの宇宙人", boss.hp / 100.0, Color(1.0, 0.6, 0.8))
+	if boss != null and boss.stunned and game_state == "boss" and not cam.is_position_behind(boss.chest()):
+		var at := cam.unproject_position(boss.chest())
+		var fs := int(90.0 + sin(Time.get_ticks_msec() * 0.012) * 12.0)
+		var text := "握れ！！"
+		var w := font_big.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		ui.draw_string_outline(font_big, at - Vector2(w * 0.5, 0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 20, Color(0.45, 0.05, 0.3))
+		ui.draw_string(font_big, at - Vector2(w * 0.5, 0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1.0, 0.9, 0.3))
+	if active_item != "":
+		var info: Dictionary = ITEMS[active_item]
+		var text := "%s  あと%d秒" % [info["name"], ceili(active_time)]
+		var pos := Vector2(ui.size.x - 300, 40)
+		ui.draw_string_outline(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 28, 10, Color(0.3, 0.05, 0.4))
+		ui.draw_string(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 28, info["color"])
 	if hit_flash > 0.0:
 		ui.draw_rect(Rect2(Vector2.ZERO, ui.size), Color(1.0, 0.2, 0.3, hit_flash * 0.35))
 	if guard_flash > 0.0:
