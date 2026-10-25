@@ -22,7 +22,7 @@ video.playsInline = true;
 video.muted = true;
 video.style.cssText =
   "position:fixed;right:12px;bottom:12px;width:180px;transform:scaleX(-1);opacity:0.6;" +
-  "border-radius:8px;z-index:10;pointer-events:none;border:2px solid #9f9;";
+  "border-radius:8px;z-index:10;pointer-events:none;border:2px solid #9f9;display:none;";
 
 async function main() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
