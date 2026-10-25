@@ -17,11 +17,11 @@ func _initialize() -> void:
 
 
 ## One synthetic hand whose palm sits at `palm` (screen pixels).
-func hand(palm: Vector2, openness: float, side: int, size := 0.17) -> Dictionary:
+func hand(palm: Vector2, openness: float, side: int, size := 0.17, like := false) -> Dictionary:
 	var vp := root.get_visible_rect().size
 	var pts: Array[Vector2] = []
 	for k in 21:
-		var q: Vector2 = FIST[k].lerp(OPEN[k], openness)
+		var q: Vector2 = HandInput.LIKE[k] if like else FIST[k].lerp(OPEN[k], openness)
 		pts.append(Vector2(q.x * side * 0.75, q.y) * size * vp.y)
 	var c := (pts[0] + pts[5] + pts[9] + pts[13] + pts[17]) / 5.0
 	var p := []
@@ -139,47 +139,59 @@ func _run() -> void:
 				"tall building resists (hint: %s)" % main.hint.text)
 	await frames(0.6, idle)
 
-	# --- paddling: direction of the hard stroke decides the direction
+	# --- thumbs-up movement
 	var vp := root.get_visible_rect().size
-	var stroke := func(k: float, fast_down: bool) -> Array:
-		var ph := fmod(k * 4.0, 1.0)  # 4 strokes; fast phase 30%, slow return 70%
-		var y: float
-		if ph < 0.3:
-			var u := ph / 0.3
-			y = lerpf(0.3, 0.8, u) if fast_down else lerpf(0.8, 0.3, u)
-		else:
-			var u := (ph - 0.3) / 0.7
-			y = lerpf(0.8, 0.3, u) if fast_down else lerpf(0.3, 0.8, u)
-		return [hand(Vector2(vp.x * 0.3, vp.y * y), 0.5, -1), hand(Vector2(vp.x * 0.7, vp.y * y), 0.5, 1)]
+	var pump := func(k: float, x: float, side: int) -> Dictionary:
+		var y := 0.5 + 0.18 * sin(k * TAU * 5.0)
+		return hand(Vector2(vp.x * x, vp.y * y), 0.0, side, 0.17, true)
+	await frames(0.3, func(_k): return [hand(Vector2(vp.x * 0.3, vp.y * 0.5), 0.0, -1, 0.17, true),
+			hand(Vector2(vp.x * 0.7, vp.y * 0.5), 0.0, 1, 0.17, true)])
+	check(main.input.hands[1].like and main.input.hands[-1].like, "thumbs-up is detected on both hands")
 	var fwd: Vector3 = -main.player.global_basis.z
 	var p0: Vector3 = main.player.position
-	await frames(3.0, func(k): return stroke.call(k, true))
+	var yaw0: float = main.player.rotation.y
+	await frames(3.0, func(k): return [pump.call(k, 0.3, -1), pump.call(k, 0.7, 1)])
 	await frames(1.0, idle)
 	var moved: float = (main.player.position - p0).dot(fwd)
-	check(moved > 5.0, "fast pull-down strokes crawl forward (%.1fm)" % moved)
-	p0 = main.player.position
-	await frames(3.0, func(k): return stroke.call(k, false))
-	await frames(1.0, idle)
-	moved = (main.player.position - p0).dot(fwd)
-	check(moved < -3.0, "fast push-up strokes crawl backward (%.1fm)" % moved)
+	check(moved > 5.0, "pumping both thumbs walks forward (%.1fm)" % moved)
+	check(absf(main.player.rotation.y - yaw0) < 0.05, "walking straight does not turn")
+	check(main.cam.rotation_degrees.z == 0.0, "camera never rolls")
 
-	# right hand dragging the world left fast = turn right (yaw decreases)
-	var yaw0: float = main.player.rotation.y
-	await frames(2.5, func(k):
-		var ph := fmod(k * 3.0, 1.0)
-		var x := lerpf(0.8, 0.3, ph / 0.3) if ph < 0.3 else lerpf(0.3, 0.8, (ph - 0.3) / 0.7)
-		return [hand(Vector2(vp.x * x, vp.y * 0.55), 0.5, 1)])
+	yaw0 = main.player.rotation.y
+	await frames(2.0, func(k): return [hand(Vector2(vp.x * (0.7 + 0.1 * sin(k * TAU * 6.0)), vp.y * 0.5), 0.0, 1, 0.17, true)])
 	await frames(1.0, idle)
 	var dyaw: float = main.player.rotation.y - yaw0
-	check(dyaw < -0.1, "fast drag to the left turns right (%.2f rad)" % dyaw)
+	check(dyaw < -0.2, "wiggling the right thumb turns right (%.2f rad)" % dyaw)
 	yaw0 = main.player.rotation.y
-	await frames(2.5, func(k):
-		var ph := fmod(k * 3.0, 1.0)
-		var x := lerpf(0.3, 0.8, ph / 0.3) if ph < 0.3 else lerpf(0.8, 0.3, (ph - 0.3) / 0.7)
-		return [hand(Vector2(vp.x * x, vp.y * 0.55), 0.5, 1)])
+	await frames(2.0, func(k): return [hand(Vector2(vp.x * (0.3 + 0.1 * sin(k * TAU * 6.0)), vp.y * 0.5), 0.0, -1, 0.17, true)])
 	await frames(1.0, idle)
 	dyaw = main.player.rotation.y - yaw0
-	check(dyaw > 0.1, "fast drag to the right turns left (%.2f rad)" % dyaw)
+	check(dyaw > 0.2, "wiggling the left thumb turns left (%.2f rad)" % dyaw)
+
+	# a thumbs-up hand never grabs buildings
+	await settle()
+	tg = find_target(true)
+	if not tg.is_empty():
+		before = main.score_count
+		await frames(1.0, func(_k): return [hand(tg["pos"], 0.0, 1, 0.17, true)])
+		check(main.score_count == before and main.active_id < 0, "thumbs-up does not destroy")
+
+	# --- bead pile left behind rattles when stroked
+	check(main.bead_sites.size() >= 3, "crushed lots are full of beads (%d piles)" % main.bead_sites.size())
+	var zara := false
+	for site in main.bead_sites:
+		var w := Vector3(site["center"].x, 1.0, site["center"].y)
+		if main.cam.is_position_behind(w):
+			continue
+		var sp: Vector2 = main.cam.unproject_position(w)
+		if not root.get_visible_rect().has_point(sp):
+			continue
+		await frames(0.8, func(k): return [hand(sp + Vector2(sin(k * TAU * 3.0) * 60.0, 0.0), 1.0, 1)])
+		for pop in main.popups:
+			zara = zara or pop["text"] == "ざらざら！"
+		if zara:
+			break
+	check(zara, "stroking a bead pile goes ざらざら")
 
 	print("DONE  failures=%d" % failures)
 	quit(1 if failures > 0 else 0)

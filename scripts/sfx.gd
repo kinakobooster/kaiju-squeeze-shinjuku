@@ -12,12 +12,18 @@ var pops: Array[AudioStream] = []
 var cracks: Array[AudioStream] = []
 var snaps: Array[AudioStream] = []
 var squirts: Array[AudioStream] = []
+var beads: Array[AudioStream] = []
 var burst: AudioStream = preload("res://audio/burst.wav")
 var thud: AudioStream = preload("res://audio/thud.wav")
 var select: AudioStream = preload("res://audio/select.wav")
 var _pool: Array[AudioStreamPlayer] = []
 var _next := 0
 var _loop_vol := 0.0
+# recorded squeezes (audio/samples): short ones for crushes, long ones layered under the grip
+var squish_shorts: Array[AudioStream] = [
+	preload("res://audio/samples/slime_squish.mp3"), preload("res://audio/samples/squish_short.mp3")]
+var squish_long: AudioStream = preload("res://audio/samples/squish_long.mp3")
+var layers: Array[AudioStreamPlayer] = []
 
 
 func _ready() -> void:
@@ -28,7 +34,17 @@ func _ready() -> void:
 		snaps.append(load("res://audio/snap%d.wav" % i))
 	for i in 2:
 		squirts.append(load("res://audio/squirt%d.wav" % i))
+	for i in 3:
+		beads.append(load("res://audio/beads%d.wav" % i))
 	loop_player = _make_loop(preload("res://audio/squeeze_loop.wav"))
+	for path in ["res://audio/samples/plastic_bottle.mp3", "res://audio/samples/squeeze_long.mp3"]:
+		var mp3: AudioStreamMP3 = load(path).duplicate()
+		mp3.loop = true
+		var lp := AudioStreamPlayer.new()
+		lp.stream = mp3
+		lp.volume_db = -80.0
+		add_child(lp)
+		layers.append(lp)
 	ambience = _make_loop(preload("res://audio/ambience.wav"))
 	ambience.volume_db = -16.0
 	ambience.play()
@@ -72,8 +88,18 @@ func update_squeeze(dt: float, active: bool, closing: float, closure: float, siz
 		loop_player.pitch_scale = clampf((0.85 + 0.55 * closure) * size_pitch, 0.4, 2.5)
 	elif loop_player.playing:
 		loop_player.stop()
+	for lp in layers:
+		if _loop_vol > 0.001:
+			if not lp.playing:  # start somewhere new each grip so it never sounds the same
+				lp.play(randf() * maxf(lp.stream.get_length() - 1.0, 0.0))
+			lp.volume_db = linear_to_db(_loop_vol) - 2.0
+			lp.pitch_scale = clampf((0.9 + 0.3 * closure) * size_pitch, 0.5, 2.0)
+		elif lp.playing:
+			lp.stop()
 	if not active:
 		return
+	if randf() < (0.3 + 2.5 * closing) * dt:
+		play(squish_shorts.pick_random(), randf_range(0.8, 1.25) * size_pitch, randf_range(-8.0, -3.0))
 	var pop_rate := 1.5 + 30.0 * closing * (0.3 + closure)
 	if randf() < pop_rate * dt:
 		play(pops.pick_random(), randf_range(0.8, 1.7) * size_pitch, randf_range(-9.0, -3.0))
@@ -89,6 +115,7 @@ func stop_squeeze() -> void:
 func play_snap(size_pitch: float) -> void:
 	stop_squeeze()
 	play(snaps.pick_random(), randf_range(0.95, 1.15) * size_pitch, 1.0)
+	play(squish_shorts.pick_random(), randf_range(1.0, 1.2) * size_pitch, 0.0)
 	play(squirts.pick_random(), randf_range(1.0, 1.25) * size_pitch, -3.0)
 	play(pops.pick_random(), randf_range(1.0, 1.5) * size_pitch, -5.0)
 
@@ -96,7 +123,8 @@ func play_snap(size_pitch: float) -> void:
 ## Slow crush: the big wet finish.
 func play_squish(size_pitch: float) -> void:
 	stop_squeeze()
-	play(burst, randf_range(0.95, 1.1) * size_pitch, 1.0)
+	play(burst, randf_range(0.95, 1.1) * size_pitch, -2.0)
+	play(squish_long, randf_range(0.9, 1.05) * size_pitch, 1.0)
 	play(squirts.pick_random(), randf_range(0.85, 1.05) * size_pitch, -1.0)
 	for i in 3:
 		play(pops.pick_random(), randf_range(0.7, 1.2) * size_pitch, -5.0)
@@ -105,7 +133,13 @@ func play_squish(size_pitch: float) -> void:
 func play_slap(size_pitch: float) -> void:
 	play(thud, randf_range(1.1, 1.3), 0.0)
 	play(snaps.pick_random(), randf_range(0.85, 1.0) * size_pitch, 0.0)
+	play(squish_shorts.pick_random(), randf_range(0.8, 1.0) * size_pitch, -2.0)
 	play(squirts.pick_random(), randf_range(0.9, 1.2) * size_pitch, -3.0)
+
+
+## Running a hand through a pile of silver beads.
+func play_beads(intensity: float) -> void:
+	play(beads.pick_random(), randf_range(0.85, 1.2), linear_to_db(clampf(0.4 + intensity * 0.6, 0.2, 1.0)))
 
 
 ## Building too big for us yet.

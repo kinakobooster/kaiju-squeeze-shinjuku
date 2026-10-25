@@ -1,6 +1,8 @@
 shader_type spatial;
 render_mode cull_disabled;
 
+#include "res://shaders/kaiju_shadow.gdshaderinc"
+
 // UV  = (distance along the facade [m], height [m]) for windows.
 // UV2 = (building id, roof flag).  COLOR.rgb = facade colour.
 
@@ -24,6 +26,7 @@ varying float v_seed;
 varying float v_roof;
 varying vec2 v_wall;
 varying float v_band;
+varying vec3 v_world;
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -54,6 +57,7 @@ void vertex() {
 		VERTEX.xz = sq_dir * a + perp * b;
 		VERTEX.y += squeeze * 0.28 * bheight * smoothstep(grip_y - 0.15, 1.0, hy);
 	}
+	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
 void fragment() {
@@ -66,14 +70,15 @@ void fragment() {
 		vec2 id = floor(cell);
 		float win = step(0.16, f.x) * step(f.x, 0.84) * step(0.22, f.y) * step(f.y, 0.82);
 		win *= 1.0 - smoothstep(0.35, 0.9, fwidth(cell.x) + fwidth(cell.y));
-		float lit = step(0.6, hash(id + vec2(v_seed * 0.137, v_seed * 0.071)));
-		vec3 wc = mix(vec3(1.0, 0.78, 0.48), vec3(0.72, 0.86, 1.0), step(0.6, hash(id.yx + v_seed)));
-		col = mix(base, base * 0.3, win);
-		emit = wc * win * lit * 1.15;
-		// far-away facades still glimmer a bit instead of turning flat grey
-		emit += wc * 0.08 * (1.0 - smoothstep(0.35, 0.9, fwidth(cell.x)));
+		// rounded candy windows
+		float round_win = 1.0 - smoothstep(0.26, 0.3, length((f - 0.5) * vec2(1.0, 1.2)));
+		win = min(win, round_win) * (1.0 - smoothstep(0.35, 0.9, fwidth(cell.x) + fwidth(cell.y)));
+		float lit = step(0.55, hash(id + vec2(v_seed * 0.137, v_seed * 0.071)));
+		vec3 wc = mix(vec3(1.0, 0.95, 0.7), vec3(1.0, 0.85, 0.95), step(0.6, hash(id.yx + v_seed)));
+		col = mix(base, mix(vec3(1.0), base, 0.35), win);
+		emit = wc * win * lit * 0.6;
 	} else {
-		col = base * 0.6;
+		col = mix(base, vec3(1.0), 0.35);
 	}
 	float hl = (abs(v_seed - hl_a) < 0.5 || abs(v_seed - hl_b) < 0.5) ? 1.0 : 0.0;
 	emit += vec3(1.0, 0.5, 0.15) * hl * hl_strength;
@@ -81,7 +86,8 @@ void fragment() {
 	float j = clamp(juice * v_band, 0.0, 0.85);
 	col = mix(col, juice_color, j);
 	emit += juice_color * j * 0.5;
-	ALBEDO = col;
-	EMISSION = emit;
+	float sh = kaiju_shadow(v_world);
+	ALBEDO = mix(col, col * KAIJU_SHADOW_TINT, sh);
+	EMISSION = emit * (1.0 - sh * 0.6);
 	ROUGHNESS = 0.85;
 }

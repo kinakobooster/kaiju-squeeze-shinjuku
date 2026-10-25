@@ -7,12 +7,13 @@ extends Node3D
 const CHUNK := 160.0
 const CELL := 20.0
 const BUILDING_SHADER := preload("res://shaders/building.gdshader")
+const GROUND_SHADER := preload("res://shaders/ground.gdshader")
 
-const FACADES: Array[Color] = [
-	Color(0.55, 0.55, 0.57), Color(0.62, 0.6, 0.56), Color(0.48, 0.5, 0.55),
-	Color(0.68, 0.66, 0.62), Color(0.42, 0.44, 0.47), Color(0.58, 0.52, 0.48),
+const FACADES: Array[Color] = [  # sweets-shop pastels
+	Color(0.62, 0.86, 1.0), Color(1.0, 0.7, 0.85), Color(1.0, 0.93, 0.55),
+	Color(0.7, 0.95, 0.8), Color(0.82, 0.74, 1.0), Color(1.0, 0.8, 0.65),
 ]
-const GLASS: Array[Color] = [Color(0.3, 0.4, 0.52), Color(0.36, 0.46, 0.55), Color(0.5, 0.56, 0.62)]
+const GLASS: Array[Color] = [Color(0.55, 0.8, 1.0), Color(0.78, 0.7, 1.0), Color(1.0, 0.68, 0.88)]
 const JUICES: Array[Color] = [
 	Color(1.0, 0.45, 0.05), Color(0.55, 0.95, 0.15), Color(0.65, 0.2, 0.85),
 	Color(0.95, 0.15, 0.3), Color(1.0, 0.85, 0.1), Color(0.35, 0.18, 0.08),
@@ -62,7 +63,7 @@ func _add_building(id: int, b: Dictionary) -> void:
 	rng.seed = id * 7919 + 13
 	var color: Color = (GLASS[rng.randi() % GLASS.size()] if h > 60.0 and rng.randf() < 0.7
 			else FACADES[rng.randi() % FACADES.size()])
-	color = color.lightened(rng.randf_range(-0.12, 0.08))
+	color = color.lightened(rng.randf_range(-0.05, 0.12))
 	var info := {
 		"name": b["n"], "h": h, "poly": poly, "center": center, "radius": radius,
 		"area": absf(_poly_area(poly)), "rect": rect, "color": color,
@@ -197,18 +198,19 @@ func _build_ground(data: Dictionary) -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(6000, 6000)
 	ground.mesh = plane
-	var gm := StandardMaterial3D.new()
-	gm.albedo_color = Color(0.24, 0.19, 0.3)
-	gm.roughness = 1.0
+	var gm := ShaderMaterial.new()
+	gm.shader = GROUND_SHADER
+	gm.set_shader_parameter("use_vertex_color", false)
+	gm.set_shader_parameter("albedo", Color(0.78, 0.74, 0.9))
 	ground.material_override = gm
 	add_child(ground)
-	_add_flat_polys(data["parks"], 0.04, Color(0.16, 0.3, 0.14))
-	_add_flat_polys(data["water"], 0.05, Color(0.12, 0.22, 0.35))
-	_add_ribbons(data["roads"], 0.08, Color(0.33, 0.29, 0.38), Color(0.95, 0.8, 0.4))
+	_add_flat_polys(data["parks"], 0.04, Color(0.6, 0.92, 0.7))
+	_add_flat_polys(data["water"], 0.05, Color(0.55, 0.85, 1.0))
+	_add_ribbons(data["roads"], 0.08, Color(0.86, 0.82, 0.95), Color(1.0, 0.75, 0.88))
 	var rails := []
 	for r in data["rails"]:
 		rails.append({"w": 7.0, "p": r["p"]})
-	_add_ribbons(rails, 0.1, Color(0.3, 0.24, 0.2), Color(0.55, 0.5, 0.45))
+	_add_ribbons(rails, 0.1, Color(0.95, 0.78, 0.6), Color(1.0, 1.0, 1.0))
 
 
 func _add_flat_polys(list: Array, y: float, col: Color) -> void:
@@ -256,10 +258,8 @@ static func _quad(st: SurfaceTool, a: Vector2, b: Vector2, s: Vector2, y: float,
 func _add_flat_mesh(st: SurfaceTool) -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.roughness = 1.0
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var m := ShaderMaterial.new()
+	m.shader = GROUND_SHADER
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)

@@ -30,3 +30,22 @@ anti_aliasing/quality/msaa_3d=1
 
 file_logging/enable_file_logging=false
 file_logging/enable_file_logging.pc=false
+
+[shader_globals]
+
+kaiju_body={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 30)
+}
+kaiju_hand_l={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 1)
+}
+kaiju_hand_r={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 1)
+}
+kaiju_yaw={
+"type": "float",
+"value": 0.0
+}

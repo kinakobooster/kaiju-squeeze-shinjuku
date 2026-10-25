@@ -13,6 +13,9 @@ class Hand:
 	var grow := 0.0  # relative hand-size change per second (> 0 = moving towards the screen)
 	var close_speed := 0.0  # how fast the hand is closing (openness lost per second)
 	var seen := 0.0  # seconds continuously tracked
+	var like := false  # thumbs-up (いいね): the hand is used for moving, not destroying
+	var like_score := 0.0
+	var like_hold := 0.0
 
 const FINGERS := [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]
 
@@ -32,6 +35,15 @@ const FIST := [
 	Vector2(0, -1), Vector2(0, -1.25), Vector2(0, -1.05), Vector2(0, -0.86),
 	Vector2(0.28, -0.93), Vector2(0.3, -1.17), Vector2(0.3, -0.98), Vector2(0.28, -0.82),
 	Vector2(0.52, -0.8), Vector2(0.55, -1.0), Vector2(0.54, -0.86), Vector2(0.5, -0.74),
+]
+# Thumbs-up: a sideways fist (fingers pointing right) with the thumb straight up.
+const LIKE := [
+	Vector2(0, 0),
+	Vector2(0.15, -0.35), Vector2(0.15, -0.7), Vector2(0.15, -1.0), Vector2(0.15, -1.3),
+	Vector2(0.95, -0.32), Vector2(1.2, -0.34), Vector2(1.0, -0.33), Vector2(0.84, -0.3),
+	Vector2(1.0, 0), Vector2(1.25, 0), Vector2(1.05, 0), Vector2(0.86, 0),
+	Vector2(0.93, 0.28), Vector2(1.17, 0.3), Vector2(0.98, 0.3), Vector2(0.82, 0.28),
+	Vector2(0.8, 0.52), Vector2(1.0, 0.55), Vector2(0.86, 0.54), Vector2(0.74, 0.5),
 ]
 
 var hands := {}  # side -> Hand
@@ -139,10 +151,11 @@ func _read_mouse(dt: float, size: Vector2) -> void:
 	var spread := Input.is_key_pressed(KEY_CTRL)
 	var gap := size.y * (0.12 if spread else 0.2)
 	var right_palm := m + Vector2(gap if two else 0.0, 0)
-	_update_hand(1, _fake_pts(right_palm, hand_size, _mouse_open, 1.0, -0.15 if two else 0.0), _mouse_open, dt, size, 1.0)
+	var like := Input.is_key_pressed(KEY_T)
+	_update_hand(1, _fake_pts(right_palm, hand_size, _mouse_open, 1.0, -0.15 if two else 0.0), _mouse_open if not like else 0.0, dt, size, 1.0)
 	if two:
 		var left_palm := m - Vector2(gap, 0)
-		_update_hand(-1, _fake_pts(left_palm, hand_size, _mouse_open, -1.0, 0.15), _mouse_open, dt, size, 1.0)
+		_update_hand(-1, _fake_pts(left_palm, hand_size, _mouse_open, -1.0, 0.15), _mouse_open if not like else 0.0, dt, size, 1.0)
 	elif hands.has(-1):
 		hands.erase(-1)
 
@@ -152,7 +165,7 @@ func _fake_pts(palm: Vector2, s: float, openness: float, mirror: float, rot: flo
 	var pts := PackedVector2Array()
 	var wrist := palm + Vector2(0, s * 0.55)
 	for k in 21:
-		var q: Vector2 = FIST[k].lerp(OPEN[k], openness)
+		var q: Vector2 = LIKE[k] if Input.is_key_pressed(KEY_T) else FIST[k].lerp(OPEN[k], openness)
 		q.x *= mirror
 		pts.append(wrist + q.rotated(rot) * s)
 	return pts
@@ -181,3 +194,26 @@ func _update_hand(side: int, pts: PackedVector2Array, openness: float, dt: float
 	h.pts = pts
 	h.size = new_size
 	h.seen += dt
+	# thumbs-up with hysteresis and a short grace period (fast pumping blurs the camera image)
+	h.like_score = lerpf(h.like_score, like_score(pts, h.openness), a)
+	if h.like_score > 0.6:
+		h.like = true
+		h.like_hold = 0.25
+	elif h.like_score < 0.3:
+		h.like_hold -= dt
+		if h.like_hold <= 0.0:
+			h.like = false
+
+
+## 0..1: fingers curled, thumb clearly the highest point of the hand and well away from the fist.
+static func like_score(pts: PackedVector2Array, openness: float) -> float:
+	if openness > 0.4:
+		return 0.0
+	var s := maxf(pts[0].distance_to(pts[9]), 1.0)
+	var top := INF
+	for k in 21:
+		if k < 2 or k > 4:
+			top = minf(top, pts[k].y)
+	var up := (top - pts[4].y) / s
+	var ext := pts[4].distance_to(pts[5]) / s
+	return clampf((up - 0.05) / 0.3, 0.0, 1.0) * clampf((ext - 0.45) / 0.3, 0.0, 1.0)

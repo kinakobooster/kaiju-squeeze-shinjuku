@@ -205,6 +205,25 @@ def make_squirt(sec=0.5):
     return normalize(hiss + drops * 0.7, 0.85)
 
 
+def make_beads(sec=0.5):
+    """'ざらざら': a handful of little metal beads rolling and clicking against each other."""
+    n = int(SR * sec)
+    t = np.arange(n) / SR
+    x = np.zeros(n)
+    density = np.sin(np.pi * np.clip(t / sec, 0, 1)) ** 0.7  # swell up and die away
+    pos = 0
+    while pos < n - 600:
+        m = int(rng.uniform(0.003, 0.008) * SR)
+        f = rng.uniform(3200, 8500)
+        tt = np.arange(m) / SR
+        click = np.sin(2 * np.pi * f * tt) * np.exp(-tt * rng.uniform(600, 1400))
+        x[pos:pos + m] += click * rng.uniform(0.2, 1.0) * density[pos]
+        pos += int(rng.exponential(0.0045) * SR / (0.2 + density[pos])) + 20
+    roll = rng.normal(0, 1, n)
+    roll = (roll - onepole_lp(roll, 3000)) * density * 0.08
+    return normalize(x + roll, 0.75)
+
+
 def make_thud(sec=0.6):
     """Giant palm slapping the ground while crawling."""
     t = t_of(sec)
@@ -246,6 +265,8 @@ def main():
         save(f"snap{i}", make_snap(rng.uniform(0.25, 0.4)))
     for i in range(2):
         save(f"squirt{i}", make_squirt(rng.uniform(0.4, 0.6)))
+    for i in range(3):
+        save(f"beads{i}", make_beads(rng.uniform(0.4, 0.65)))
     save("select", make_select())
     save("ambience", make_ambience())
 

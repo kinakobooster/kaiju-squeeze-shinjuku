@@ -1,8 +1,9 @@
 extends Node3D
 ## Kaiju Squeeze Shinjuku: crawl through Shinjuku with your webcam hands and squeeze buildings.
 ##
-## Per hand: MOVE (drag the ground: down = forward, up = back, sideways = turn)
-##   -> open palm held still = AIM (pick a building under the palm)
+## Thumbs-up (いいね) hands move you: both thumbs pumped up and down = walk forward,
+## one thumb wiggled = turn towards that hand's side.
+## Any other hand destroys: open palm held still = AIM (pick a building under the palm)
 ##   -> close the fist = GRIP. The building is crushed exactly as far as the fist is closed:
 ##      snap it shut for a crisp "サクッ", close slowly for a long "グジュー".
 ## Slapping towards the screen (or a very fast swipe) smashes the building under the palm.
@@ -13,9 +14,9 @@ enum State { MOVE, AIM, GRIP }
 const EYE_START := 30.0
 const EYE_MAX := 175.0
 const CRUSH_RATIO := 1.6  # can crush buildings up to eye height * this
-const FORWARD_K := 40.0
-const TURN_DRAG := 1.1  # sideways hand motion drags the view around
-const TURN_SIDE := 0.8  # one hand paddling vertically turns towards / away from its side
+const WALK_K := 55.0  # forward push per unit of thumbs-up pumping
+const TURN_K := 1.6  # turn rate per unit of one-thumb wiggling
+const CAM_PITCH := -15.0
 const MAX_SPEED := 110.0
 const GRIP_OPEN := 0.7  # openness below this starts a grip
 const FIST_OPEN := 0.12  # openness at which the building is fully crushed
@@ -46,7 +47,8 @@ var ctl := {}  # side -> {state, still, target, hit, act, stroking, cool}
 var speed := 0.0
 var yaw_vel := 0.0
 var shake := 0.0
-var bob := 0.0
+var bead_sites: Array[Dictionary] = []  # {center: Vector2, radius, node, cool, bounce}
+var popups: Array[Dictionary] = []  # {text, pos, t}
 var eye := EYE_START
 var eye_target := EYE_START
 var ready_to_play := false
@@ -99,7 +101,7 @@ func crush_limit() -> float:
 
 
 func reach() -> float:
-	return 150.0 + eye * 3.5
+	return 40.0 + eye * 2.5
 
 
 # --- setup --------------------------------------------------------------------------------
@@ -107,8 +109,8 @@ func reach() -> float:
 func _setup_world() -> void:
 	var env := Environment.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.22, 0.06, 0.55)
-	sky_mat.sky_horizon_color = Color(0.98, 0.55, 0.92)
+	sky_mat.sky_top_color = Color(0.45, 0.25, 0.85)
+	sky_mat.sky_horizon_color = Color(1.0, 0.72, 0.95)
 	sky_mat.sky_curve = 0.25
 	sky_mat.ground_horizon_color = Color(0.75, 0.45, 0.85)
 	sky_mat.ground_bottom_color = Color(0.2, 0.1, 0.3)
@@ -117,15 +119,15 @@ func _setup_world() -> void:
 	sky.sky_material = sky_mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.9
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.15
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(1.0, 0.97, 1.0)
+	env.ambient_light_energy = 0.55
+	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color(0.85, 0.5, 0.92)
-	env.fog_depth_begin = 350.0
-	env.fog_depth_end = 1900.0
+	env.fog_light_color = Color(0.92, 0.78, 1.0)
+	env.fog_depth_begin = 500.0
+	env.fog_depth_end = 2400.0
 	env.fog_density = 1.0
 	env.glow_enabled = true
 	env.glow_intensity = 0.8
@@ -135,13 +137,14 @@ func _setup_world() -> void:
 	add_child(we)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-20, -100, 0)
-	sun.light_color = Color(1.0, 0.8, 0.95)
-	sun.light_energy = 1.0
+	sun.light_color = Color(1.0, 0.98, 0.95)
+	sun.light_energy = 0.75
 	add_child(sun)
 	add_child(player)
-	player.position = Vector3(80, 0, 20)
-	player.rotation.y = PI * 0.5  # face west, towards the skyscrapers of Nishi-Shinjuku
-	cam.rotation_degrees.x = -17.0
+	# start in Kabukicho among small buildings, facing west towards the Nishi-Shinjuku towers
+	player.position = Vector3(420, 0, -500)
+	player.rotation.y = PI * 0.5
+	cam.rotation_degrees.x = CAM_PITCH
 	cam.fov = 72.0
 	cam.far = 3000.0
 	cam.near = 0.5
@@ -244,10 +247,10 @@ func _setup_ui() -> void:
 	help.anchor_top = 1.0
 	help.anchor_bottom = 1.0
 	help.offset_top = -150
-	help.text = ("地面をつかんで引き寄せる = 前進（押し返すと後退・横に動かすと旋回）／ 片手で漕ぐ = その向きに曲がる\n"
+	help.text = ("両手でいいねして上下に振る = 前進 ／ 片手のいいねを揺らす = その手の方へ旋回\n"
 			+ "パーで止める = ビルを選ぶ ／ 素早くグー = サクッ！ ／ ゆっくりグー = グジュウ〜 ／ 画面に向かって叩く = バチーン！\n"
-			+ "両手で握る or パーで挟む = 両手スクイーズ ／ 潰すほど大きくなる！\n"
-			+ "[マウス] 左長押し=ゆっくり握る  Space=素早く握る  右=叩く  Shift=両手  WASD=移動  P=カメラ映像  H=ヘルプ")
+			+ "両手で握る or パーで挟む = 両手スクイーズ ／ 潰すほど大きくなる ／ 跡地のビーズをなでるとざらざら\n"
+			+ "[マウス] 左長押し=ゆっくり握る  Space=素早く握る  右=叩く  T=いいね  Shift=両手  WASD=移動  H=ヘルプ")
 	banner = _label(top, 54, Vector2.ZERO)
 	banner.add_theme_font_override("font", font_big)
 	banner.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -258,9 +261,10 @@ func _setup_ui() -> void:
 	banner.add_theme_constant_override("outline_size", 18)
 	banner.modulate.a = 0.0
 	hint = _label(top, 24, Vector2.ZERO)
-	hint.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	hint.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.offset_top = 60
+	hint.offset_top = -200
+	hint.offset_bottom = -160
 	hint.modulate.a = 0.0
 	loading = _label(top, 40, Vector2.ZERO)
 	loading.add_theme_font_override("font", font_big)
@@ -330,6 +334,7 @@ func _process(dt: float) -> void:
 	_update_movement(dt)
 	_update_squeeze(dt)
 	_update_relaxing(dt)
+	_update_shadows_and_beads(dt)
 	_update_camera(dt)
 	if banner_time > 0.0:
 		banner_time -= dt
@@ -407,10 +412,15 @@ func _update_hands(dt: float) -> void:
 			c["target"] = -1
 			c["still"] = 0.0
 			continue
+		if h.like:
+			c["state"] = State.MOVE
+			c["target"] = -1
+			c["still"] = 0.0
+			continue
 		var spd := h.vel.length()
 		# slap towards the screen, or a very fast swipe, smashes whatever is under the palm
 		if c["state"] != State.GRIP and c["cool"] <= 0.0 and h.seen > 0.3 \
-				and (h.grow > SLAP_GROW or spd > SLAP_SPEED):
+				and (h.grow > SLAP_GROW or (spd > SLAP_SPEED and input.source == "camera")):
 			var hit := _ray(h.palm)
 			if not hit.is_empty():
 				c["cool"] = 0.45
@@ -471,48 +481,34 @@ func _update_hands(dt: float) -> void:
 	city.set_hover(hl[0], hl[1], 0.6 + 0.4 * sin(Time.get_ticks_msec() * 0.012))
 
 
-## Strokes count by how hard they are: a fast stroke beats the slow return stroke,
-## so the direction you paddle decides where you go.
-static func _power(v: float) -> float:
-	var a := maxf(absf(v) - 0.25, 0.0)
-	return signf(v) * a * a
-
-
 func _update_movement(dt: float) -> void:
-	var fwd := 0.0
-	var drag := 0.0
-	var side_turn := 0.0
-	var visible := 0
+	var likes: Array[HandInput.Hand] = []
+	for side in [-1, 1]:
+		var h: HandInput.Hand = input.hands.get(side)
+		if h != null and h.like:
+			likes.append(h)
+	var fwd_acc := 0.0
+	var yaw_acc := 0.0
+	var k := eye / 115.0
+	if likes.size() == 2:
+		# both thumbs up, pumped up and down = marching forward
+		var pump := (absf(likes[0].vel.y) + absf(likes[1].vel.y)) * 0.5
+		fwd_acc = maxf(pump - 0.15, 0.0) * WALK_K * k
+	elif likes.size() == 1:
+		# one thumb wiggled = turn towards that hand's side (right hand -> right)
+		var h := likes[0]
+		var wiggle := maxf(h.vel.length() - 0.15, 0.0)
+		yaw_acc = -h.side * minf(wiggle, 3.0) * TURN_K
 	for side in [-1, 1]:
 		var h: HandInput.Hand = input.hands.get(side)
 		var c: Dictionary = ctl[side]
-		if h == null:
-			c["act"] = 0.0
-			continue
-		visible += 1
-		if c["state"] != State.MOVE:
-			continue
-		var py := _power(h.vel.y)  # > 0: pulling the ground towards you
-		var px := _power(h.vel.x)
-		fwd += py
-		drag += px
-		side_turn += side * py
-		var strength := absf(py) + absf(px)
-		c["act"] = lerpf(c["act"], 1.0 if absf(py) > 0.1 else 0.0, 1.0 - exp(-4.0 * dt))
-		if strength > 0.5 and not c["stroking"]:
+		var moving := h != null and h.like and absf(h.vel.y) > 0.6
+		if moving and not c["stroking"]:
 			c["stroking"] = true
-		elif strength < 0.05 and c["stroking"]:
+		elif not moving and c["stroking"]:
 			c["stroking"] = false
-			sfx.play(sfx.thud, randf_range(0.85, 1.1) * clampf(60.0 / eye, 0.7, 1.6), -8.0)
-			bob = 1.0
-			shake = maxf(shake, 0.2)
-	var both: bool = visible == 2 and ctl[-1]["act"] > 0.12 and ctl[1]["act"] > 0.12
-	var k := eye / 115.0
-	var fwd_acc := fwd * FORWARD_K * k * (1.0 if both else 0.4)
-	# dragging the world to the right turns the view left (+yaw), like a touch screen
-	var yaw_acc := drag * TURN_DRAG
-	if not both:
-		yaw_acc -= side_turn * TURN_SIDE  # right hand pulling = turn right, pushing = turn left
+			if likes.size() == 2:  # a giant footstep, heard but not felt in the camera
+				sfx.play(sfx.thud, randf_range(0.85, 1.1) * clampf(60.0 / eye, 0.7, 1.6), -10.0)
 	if input.source == "mouse":
 		var ax := 0.0
 		if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): ax = 1.0
@@ -524,8 +520,8 @@ func _update_movement(dt: float) -> void:
 		yaw_acc += tr * 4.0
 	speed = clampf(speed + fwd_acc * dt, -MAX_SPEED * 0.5 * k, MAX_SPEED * k)
 	yaw_vel += yaw_acc * dt
-	speed *= exp(-1.4 * dt)
-	yaw_vel *= exp(-3.0 * dt)
+	speed *= exp(-1.6 * dt)
+	yaw_vel *= exp(-4.0 * dt)
 	player.rotation.y += yaw_vel * dt
 	var forward := -player.global_basis.z
 	var p := player.position + forward * speed * dt
@@ -630,6 +626,9 @@ func _update_squeeze(dt: float) -> void:
 	juice_fx.global_position = Vector3(b["center"].x, b["h"] * grip_y, b["center"].y)
 	juice_fx.emission_sphere_radius = b["radius"] * 0.5
 	juice_fx.color = b["juice"]
+	var sz := clampf(b["radius"] / 45.0, 0.08, 0.7)
+	juice_fx.scale_amount_min = 0.5 * sz
+	juice_fx.scale_amount_max = 1.4 * sz
 	juice_fx.emitting = closing > 0.3 and closure > 0.2
 	if closure >= 0.97:
 		var elapsed := clock - grip_start
@@ -664,7 +663,10 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 			one.amount = fx.amount / 2
 		one.explosiveness = 1.0 if style != "squish" else 0.7
 		one.initial_velocity_max = 110.0 if style != "squish" else 70.0
-		one.color = b["juice"] if fx == juice_fx else Color(0.6, 0.55, 0.62)
+		one.color = b["juice"] if fx == juice_fx else b["color"]
+		var sz := clampf(b["radius"] / 45.0, 0.08, 0.7)  # droplets in proportion to the building
+		one.scale_amount_min = 0.5 * sz
+		one.scale_amount_max = 1.4 * sz
 		one.emitting = true
 		get_tree().create_timer(3.0).timeout.connect(one.queue_free)
 	if id == active_id:
@@ -673,7 +675,7 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 		active_node = null
 		closure = 0.0
 	relaxing.erase(id)
-	_spawn_puddle(b)
+	_spawn_beads(b)
 	city.destroy(id)
 	score_count += 1
 	var bname: String = b["name"] if b["name"] != "" else "名もなきビル"
@@ -689,22 +691,103 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 			ctl[side]["target"] = -1
 
 
-func _spawn_puddle(b: Dictionary) -> void:
-	var mi := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = b["radius"] * 0.85
-	cyl.bottom_radius = b["radius"] * 0.95
-	cyl.height = 1.2
-	mi.mesh = cyl
+## The empty lot fills with silver beads that rattle when you run a hand through them.
+func _spawn_beads(b: Dictionary) -> void:
+	var poly: PackedVector2Array = b["poly"]
+	var rect: Rect2 = b["rect"]
+	var center: Vector2 = b["center"]
+	var radius: float = b["radius"]
+	var count := clampi(int(b["area"] / 5.0), 40, 450)
+	var bead_r := clampf(sqrt(b["area"]) / 30.0, 0.7, 2.2)
+	var sphere := SphereMesh.new()
+	sphere.radius = bead_r
+	sphere.height = bead_r * 2.0
+	sphere.radial_segments = 10
+	sphere.rings = 5
 	var m := StandardMaterial3D.new()
-	m.albedo_color = b["juice"].darkened(0.2)
+	m.albedo_color = Color(0.92, 0.94, 1.0)
+	m.metallic = 0.8
+	m.roughness = 0.1
 	m.emission_enabled = true
-	m.emission = b["juice"] * 0.25
-	m.roughness = 0.15
-	m.metallic = 0.3
-	mi.material_override = m
-	mi.position = Vector3(b["center"].x, 0.6, b["center"].y)
+	m.emission = Color(0.6, 0.62, 0.7)
+	sphere.material = m
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = sphere
+	mm.instance_count = count
+	var rng := RandomNumberGenerator.new()
+	var placed := 0
+	var tries := 0
+	while placed < count and tries < count * 20:
+		tries += 1
+		var q := Vector2(rng.randf_range(rect.position.x, rect.end.x), rng.randf_range(rect.position.y, rect.end.y))
+		if not Geometry2D.is_point_in_polygon(q, poly):
+			continue
+		var heap := (1.0 - clampf(q.distance_to(center) / radius, 0.0, 1.0)) * sqrt(b["area"]) * 0.12
+		var y := bead_r + rng.randf() * heap
+		mm.set_instance_transform(placed, Transform3D(Basis.IDENTITY, Vector3(q.x - center.x, y, q.y - center.y)))
+		placed += 1
+	mm.visible_instance_count = placed
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	mi.position = Vector3(center.x, 0.0, center.y)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
+	bead_sites.append({"center": center, "radius": radius, "node": mi, "cool": 0.0, "bounce": 0.0})
+
+
+## Where a hand is in the world: under the palm, but never further than the arm reaches.
+func _hand_world(h: HandInput.Hand) -> Vector3:
+	var o := cam.project_ray_origin(h.palm)
+	var d := cam.project_ray_normal(h.palm)
+	var hit := city.pick(o, d, reach() * 1.5)
+	var p: Vector3
+	if not hit.is_empty():
+		p = hit["point"]
+	elif d.y < -0.01:
+		p = o + d * (-o.y / d.y)
+	else:
+		p = o + Vector3(d.x, 0.0, d.z).normalized() * reach()
+	var flat := Vector2(p.x - player.position.x, p.z - player.position.z)
+	if flat.length() > reach():
+		flat = flat.normalized() * reach()
+	return Vector3(player.position.x + flat.x, p.y, player.position.z + flat.y)
+
+
+func _update_shadows_and_beads(dt: float) -> void:
+	# shadows projected onto the city (shaders/kaiju_shadow.gdshaderinc): the body stretches
+	# out in front of us and each hand's shadow shows where it can reach
+	var rs := RenderingServer
+	rs.global_shader_parameter_set(&"kaiju_yaw", player.rotation.y)
+	rs.global_shader_parameter_set(&"kaiju_body",
+			Vector4(player.position.x, player.position.z, 0.0, eye))
+	for side in [-1, 1]:
+		var h: HandInput.Hand = input.hands.get(side)
+		var param := &"kaiju_hand_r" if side > 0 else &"kaiju_hand_l"
+		if h == null:
+			rs.global_shader_parameter_set(param, Vector4(0, 0, 0, 1))
+			continue
+		var w := _hand_world(h)
+		var hs := eye * 0.6
+		rs.global_shader_parameter_set(param, Vector4(w.x, w.z, hs, 0.15 if h.like else h.openness))
+		# stroking a bead pile
+		if h.vel.length() < 0.35:
+			continue
+		var w2 := Vector2(w.x, w.z)
+		for site in bead_sites:
+			if site["cool"] <= 0.0 and w2.distance_to(site["center"]) < site["radius"] + hs * 0.3:
+				site["cool"] = 0.28
+				site["bounce"] = 1.0
+				sfx.play_beads(clampf(h.vel.length() / 2.0, 0.0, 1.0))
+				popups.append({"text": "ざらざら！", "pos": h.palm + Vector2(randf_range(-30, 30), -h.size), "t": 0.0})
+	for site in bead_sites:
+		site["cool"] = maxf(site["cool"] - dt, 0.0)
+		site["bounce"] = maxf(site["bounce"] - dt * 3.0, 0.0)
+		var bounce: float = site["bounce"]
+		site["node"].scale = Vector3(1.0, 1.0 + sin(bounce * PI * 3.0) * bounce * 0.4, 1.0)
+	for pop in popups:
+		pop["t"] += dt
+	popups = popups.filter(func(pop): return pop["t"] < 0.9)
 
 
 func _update_relaxing(dt: float) -> void:
@@ -721,13 +804,10 @@ func _update_relaxing(dt: float) -> void:
 
 
 func _update_camera(dt: float) -> void:
-	shake = maxf(shake - dt * 1.8, 0.0)
-	bob = maxf(bob - dt * 3.0, 0.0)
-	var s := shake * shake * 3.0 * clampf(eye / 80.0, 0.4, 1.5)
-	cam.position = Vector3(randf_range(-s, s), eye - sin(bob * PI) * eye * 0.05 + randf_range(-s, s), 0)
-	cam.rotation_degrees.z = -yaw_vel * 4.0
-	# small kaiju looks up at the towers (and the stars); big kaiju looks down on the city
-	cam.rotation_degrees.x = lerpf(-4.0, -17.0, clampf((eye - EYE_START) / 110.0, 0.0, 1.0))
+	shake = maxf(shake - dt * 2.5, 0.0)
+	var s := shake * shake * 1.5 * clampf(eye / 80.0, 0.4, 1.5)
+	cam.position = Vector3(randf_range(-s, s), eye + randf_range(-s, s), 0)
+	cam.rotation_degrees = Vector3(CAM_PITCH, 0.0, 0.0)
 
 
 # --- overlay ------------------------------------------------------------------------------
@@ -758,3 +838,8 @@ func _draw_ui() -> void:
 	if ha != null and hb != null and press_target >= 0:
 		ui.draw_dashed_line(ha.palm, hb.palm, Color(1, 0.75, 0.25, 0.8), 4.0, 16.0)
 		ui.draw_circle((ha.palm + hb.palm) * 0.5, 8.0, Color(1, 0.75, 0.25))
+	for pop in popups:
+		var a: float = 1.0 - pop["t"] / 0.9
+		var pos: Vector2 = pop["pos"] - Vector2(0, pop["t"] * 60.0)
+		ui.draw_string_outline(font_big, pos, pop["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, 30, 10, Color(0.4, 0.2, 0.6, a))
+		ui.draw_string(font_big, pos, pop["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(0.95, 0.97, 1.0, a))
