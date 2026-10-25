@@ -1,10 +1,10 @@
 extends Node3D
 ## Kaiju Squeeze Shinjuku: crawl through Shinjuku with your webcam hands and squeeze buildings.
 ##
-## Thumbs-up (いいね) hands move you: both thumbs pumped up and down = walk forward,
-## one thumb wiggled = turn towards that hand's side.
-## Any other hand destroys: open palm held still = AIM (pick a building under the palm)
-##   -> close the fist = GRIP. The building is crushed exactly as far as the fist is closed:
+## Thumbs-up (いいね) hands move you: pump a thumb up and down to walk (both thumbs = 1.5x),
+## thumbs in the middle of the screen go straight, on the right turn right, on the left turn left.
+## Any other hand destroys: open palm held still = AIM (the hand grows and covers buildings)
+##   -> close the fist = GRIP. The buildings are crushed exactly as far as the fist is closed:
 ##      snap it shut for a crisp "サクッ", close slowly for a long "グジュー".
 ## Slapping towards the screen (or a very fast swipe) smashes the building under the palm.
 ## You start small; every crushed building makes you grow so you can take on taller ones.
@@ -15,7 +15,8 @@ const EYE_START := 30.0
 const EYE_MAX := 175.0
 const CRUSH_RATIO := 1.6  # can crush buildings up to eye height * this
 const WALK_K := 130.0  # forward push per unit of thumbs-up pumping (long strides)
-const TURN_K := 1.6  # turn rate per unit of one-thumb wiggling
+const TURN_K := 4.0  # turn rate with the thumbs all the way to one side
+const STEER_DEAD := 0.25  # thumbs within this of the middle walk straight
 const CAM_PITCH := -15.0
 const MAX_SPEED := 160.0
 const CHARGE_TIME := 2.5  # seconds for an open palm to grow to full size
@@ -301,7 +302,8 @@ func _setup_ui() -> void:
 	help.anchor_top = 1.0
 	help.anchor_bottom = 1.0
 	help.offset_top = -150
-	help.text = ("両手でいいねして上下に振る = 前進 ／ 片手のいいねを揺らす = その手の方へ旋回\n"
+	help.visible = false  # H shows the full list; camera players get the two-line tutorial instead
+	help.text = ("いいねを上下に振る = 前進（両手で1.5倍速） ／ 画面の右でいいね = 右へ、左で = 左へ\n"
 			+ "パーで止める = 手のひらに魔眼が開き、手がだんだん大きくなる ／ 手の下のビルが全部赤く震える ／ 素早くグー = サクッ！ ／ ゆっくりグー = グジュウ〜 ／ 二本指でつまむ = プチッ！\n"
 			+ "画面に向かって叩く = 手と腕の影の下をまとめてドドド！ ／ 両手で握る or パーで挟む = 両手スクイーズ ／ 潰すほど大きくなる\n"
 			+ "[マウス] 左長押し=握る  Space=素早く握る  Q=つまむ  右=叩く  T=いいね  B=口を開ける  F=笑顔  WASD=移動  H=ヘルプ")
@@ -342,7 +344,7 @@ func _setup_ui() -> void:
 	title_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.35))
 	title_label.add_theme_color_override("font_outline_color", Color(0.35, 0.05, 0.45))
 	title_label.add_theme_constant_override("outline_size", 18)
-	title_label.text = "かいじゅう スクイーズ 新宿\n\n両手で いいね して\n上下に振って 前進で スタート！"
+	title_label.text = "かいじゅう スクイーズ 新宿\n\nいいね して\n上下に振って 前進で スタート！"
 
 
 func _label(parent: Node, size: int, pos: Vector2) -> Label:
@@ -609,15 +611,19 @@ func _update_movement(dt: float) -> void:
 	var fwd_acc := 0.0
 	var yaw_acc := 0.0
 	var k := eye / 115.0
-	if likes.size() == 2:
-		# both thumbs up, pumped up and down = marching forward
-		var pump := (absf(likes[0].vel.y) + absf(likes[1].vel.y)) * 0.5
-		fwd_acc = maxf(pump - 0.15, 0.0) * WALK_K * k
-	elif likes.size() == 1:
-		# one thumb wiggled = turn towards that hand's side (right hand -> right)
-		var h := likes[0]
-		var wiggle := maxf(h.vel.length() - 0.15, 0.0)
-		yaw_acc = -h.side * minf(wiggle, 3.0) * TURN_K
+	var both := likes.size() == 2
+	if not likes.is_empty():
+		# thumbs up pumped up and down = marching forward (two hands march 1.5x faster);
+		# where the thumbs are steers: middle = straight, right side = turn right, left = left
+		var pump := 0.0
+		var x := 0.0
+		for h in likes:
+			pump += absf(h.vel.y) / likes.size()
+			x += h.palm.x / likes.size()
+		fwd_acc = maxf(pump - 0.15, 0.0) * WALK_K * k * (1.5 if both else 1.0)
+		var off := (x / get_viewport().get_visible_rect().size.x - 0.5) * 2.0
+		var steer := signf(off) * clampf((absf(off) - STEER_DEAD) / (0.8 - STEER_DEAD), 0.0, 1.0)
+		yaw_acc = -steer * TURN_K
 	for side in [-1, 1]:
 		var h: HandInput.Hand = input.hands.get(side)
 		var c: Dictionary = ctl[side]
@@ -626,7 +632,7 @@ func _update_movement(dt: float) -> void:
 			c["stroking"] = true
 		elif not moving and c["stroking"]:
 			c["stroking"] = false
-			if likes.size() == 2:  # a giant footstep, heard but not felt in the camera
+			if not likes.is_empty():  # a giant footstep, heard but not felt in the camera
 				sfx.play(sfx.thud, randf_range(0.85, 1.1) * clampf(60.0 / eye, 0.7, 1.6), -10.0)
 	if input.source == "mouse":
 		var ax := 0.0
@@ -640,7 +646,7 @@ func _update_movement(dt: float) -> void:
 	var midas := active_item == "midas"
 	if midas:
 		fwd_acc *= 2.5
-	var top_speed := MAX_SPEED * k * (2.5 if midas else 1.0)
+	var top_speed := MAX_SPEED * k * (2.5 if midas else 1.0) * (1.5 if both else 1.0)
 	speed = clampf(speed + fwd_acc * dt, -top_speed * 0.5, top_speed)
 	yaw_vel += yaw_acc * dt
 	speed *= exp(-1.1 * dt)
@@ -701,7 +707,7 @@ func _begin_squeeze(ids: Array[int], hit: Vector3) -> void:
 			biggest = id
 	grip_y = clampf(hit.y / city.buildings[active_ids[0]]["h"], 0.2, 0.8)
 	size_pitch = _size_pitch(city.buildings[biggest])
-	sfx.frozen = city.buildings[active_ids[0]].get("frozen", false)
+	sfx.frozen = active_ids.any(func(i): return city.buildings[i].get("frozen", false))
 
 
 func _end_squeeze() -> void:
@@ -798,11 +804,12 @@ func _style_fx(style: String, pitch: float) -> String:
 
 ## Everything in the fist goes at once.
 func _crush_group(ids: Array[int], style: String) -> void:
+	var ice := ids.any(func(i): return city.buildings[i].get("frozen", false))
+	if ice and style != "slap":
+		style = "ice"
 	if ids.size() == 1:
 		_crush(ids[0], juice_fx.global_position, style)
 		return
-	if city.buildings[ids[0]].get("frozen", false):
-		style = "ice"
 	banner.text = _style_fx(style, size_pitch) + "\n%d棟まとめて！" % ids.size()
 	for i in mini(ids.size(), 6):  # a rumble behind the main crunch
 		get_tree().create_timer(0.06 * (i + 1)).timeout.connect(func():
@@ -1641,6 +1648,8 @@ func _update_smile(dt: float) -> void:
 
 func _draw_ui() -> void:
 	var font := ThemeDB.fallback_font
+	if input.source == "camera" and game_state != "won" and game_state != "lost" and not help.visible:
+		_draw_tutorial()
 	for side in [-1, 1]:
 		var h: HandInput.Hand = input.hands.get(side)
 		if h == null:
@@ -1731,6 +1740,35 @@ func _draw_magic_eye(c: Vector2, w: float, open: float, look: Vector2, charge: f
 	ui.draw_circle(ic + Vector2(-ir * 0.35, -ir * 0.4), ir * 0.15, Color(1, 1, 1, 0.9))
 	lid.append(lid[0])
 	ui.draw_polyline(lid, outline, 4.0, true)
+
+
+## Two lines at the bottom: 👍で移動！ / 🖐️→ ゆっくり✊でにぎる (Twemoji images: the web font has no emoji).
+const EMOJI := {
+	"like": preload("res://ui/emoji_1f44d.png"),
+	"open": preload("res://ui/emoji_1f590.png"),
+	"fist": preload("res://ui/emoji_270a.png"),
+}
+
+
+func _draw_tutorial() -> void:
+	var fs := 34
+	var icon := 52.0
+	var rows := [["like", "で移動！"], ["open", "→ ゆっくり", "fist", "でにぎる"]]
+	var y := ui.size.y - 110.0
+	for row in rows:
+		var w := 0.0
+		for part in row:
+			w += (icon if EMOJI.has(part) else font_big.get_string_size(part, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x) + 6.0
+		var x := (ui.size.x - w) * 0.5
+		for part in row:
+			if EMOJI.has(part):
+				ui.draw_texture_rect(EMOJI[part], Rect2(x, y - fs * 0.35 - icon * 0.5, icon, icon), false)
+				x += icon + 6.0
+			else:
+				ui.draw_string_outline(font_big, Vector2(x, y), part, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 10, Color(0.3, 0.05, 0.4, 0.9))
+				ui.draw_string(font_big, Vector2(x, y), part, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+				x += font_big.get_string_size(part, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + 6.0
+		y += icon + 8.0
 
 
 ## Outline of an open hand (same landmarks as the tracker) centred on its palm.

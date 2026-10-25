@@ -31,6 +31,7 @@ var _fists := {}  # side -> MeshInstance3D
 var _arms := {}  # side -> MeshInstance3D
 var _lamp: StandardMaterial3D
 var _skin: StandardMaterial3D
+var _pink: StandardMaterial3D
 var _t := 0.0
 
 
@@ -40,6 +41,10 @@ func _ready() -> void:
 	_rig.add_child(_body)
 	_skin = _mat(Color(0.93, 0.93, 1.0), 0.0)
 	var pink := _mat(Color(1.0, 0.62, 0.82), 0.0)
+	_pink = pink
+	for m in [_skin, _pink]:  # glows red while it can be grabbed
+		m.emission_enabled = true
+		m.emission = Color.BLACK
 	var eye := _mat(Color(1.0, 0.95, 0.5), 2.2)
 	_lamp = _mat(Color(0.5, 0.85, 1.0), 2.5)
 	for x in [-16.0, 16.0]:  # legs
@@ -162,9 +167,16 @@ func tick(dt: float, camera_right: Vector3) -> bool:
 	_body.rotation.y = twist
 	_body.rotation.x = lean
 	_body.scale = Vector3(1.0 + squash * 0.7, 1.0 - squash * 0.6, 1.0 + squash * 0.7)
-	_body.position.x = sin(_t * 70.0) * 4.0 * hurt
+	# knocked out = ready to squeeze: it shivers red like the buildings under your hand
+	var grab := (0.6 + 0.4 * sin(_t * 14.0)) if stunned else 0.0
+	_body.position.x = sin(_t * 70.0) * 4.0 * hurt + (sin(_t * 53.0) * 2.5 + sin(_t * 79.0) * 1.5) * signf(grab)
+	_body.position.z = sin(_t * 61.0) * 2.0 * signf(grab)
+	var red := Color(1.0, 0.12, 0.18)
 	var flash := Color(1.0, 0.55, 0.55) if hurt > 0.0 else Color(0.93, 0.93, 1.0)
-	_skin.albedo_color = flash
+	_skin.albedo_color = flash.lerp(red, grab * 0.75)
+	_pink.albedo_color = Color(1.0, 0.62, 0.82).lerp(red, grab * 0.75)
+	_skin.emission = red * grab * 0.6
+	_pink.emission = red * grab * 0.6
 	_lamp.albedo_color = Color(1.0, 0.3, 0.35) if hp < 30.0 and fmod(_t, 0.5) < 0.25 else Color(0.5, 0.85, 1.0)
 	_lamp.emission = _lamp.albedo_color
 	for side in [-1, 1]:

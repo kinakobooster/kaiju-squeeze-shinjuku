@@ -241,26 +241,35 @@ func _run() -> void:
 	await frames(0.3, func(_k): return [hand(Vector2(vp.x * 0.3, vp.y * 0.5), 0.0, -1, 0.17, true),
 			hand(Vector2(vp.x * 0.7, vp.y * 0.5), 0.0, 1, 0.17, true)])
 	check(main.input.hands[1].like and main.input.hands[-1].like, "thumbs-up is detected on both hands")
-	var fwd: Vector3 = -main.player.global_basis.z
-	var p0: Vector3 = main.player.position
-	var yaw0: float = main.player.rotation.y
-	await frames(3.0, func(k): return [pump.call(k, 0.3, -1), pump.call(k, 0.7, 1)])
-	await frames(1.0, idle)
-	var moved: float = (main.player.position - p0).dot(fwd)
-	check(moved > 5.0, "pumping both thumbs walks forward (%.1fm)" % moved)
-	check(absf(main.player.rotation.y - yaw0) < 0.05, "walking straight does not turn")
+	# one thumb pumped in the middle walks straight; two thumbs walk faster
+	await frames(3.0, idle)
+	var walk := func(hands_at: Callable) -> Vector3:
+		teleport_to_town()
+		await frames(3.0, idle)
+		var f: Vector3 = -main.player.global_basis.z
+		var q0: Vector3 = main.player.position
+		var y0: float = main.player.rotation.y
+		await frames(3.0, hands_at)
+		await frames(1.0, idle)
+		return Vector3((main.player.position - q0).dot(f), main.player.rotation.y - y0, 0.0)
+	var one: Vector3 = await walk.call(func(k): return [pump.call(k, 0.5, 1)])
+	check(one.x > 5.0, "pumping one thumb in the middle walks forward (%.1fm)" % one.x)
+	check(absf(one.y) < 0.05, "one thumb in the middle does not turn")
+	var two: Vector3 = await walk.call(func(k): return [pump.call(k, 0.3, -1), pump.call(k, 0.7, 1)])
+	check(two.x > one.x * 1.3, "two thumbs walk faster (%.1fm vs %.1fm)" % [two.x, one.x])
+	check(absf(two.y) < 0.05, "two thumbs either side of the middle walk straight")
 	check(main.cam.rotation_degrees.z == 0.0, "camera never rolls")
 
-	yaw0 = main.player.rotation.y
-	await frames(2.0, func(k): return [hand(Vector2(vp.x * (0.7 + 0.1 * sin(k * TAU * 6.0)), vp.y * 0.5), 0.0, 1, 0.17, true)])
+	var yaw0: float = main.player.rotation.y
+	await frames(1.5, func(_k): return [hand(Vector2(vp.x * 0.85, vp.y * 0.5), 0.0, 1, 0.17, true)])
 	await frames(1.0, idle)
 	var dyaw: float = main.player.rotation.y - yaw0
-	check(dyaw < -0.2, "wiggling the right thumb turns right (%.2f rad)" % dyaw)
+	check(dyaw < -0.2, "a thumbs-up on the right turns right (%.2f rad)" % dyaw)
 	yaw0 = main.player.rotation.y
-	await frames(2.0, func(k): return [hand(Vector2(vp.x * (0.3 + 0.1 * sin(k * TAU * 6.0)), vp.y * 0.5), 0.0, -1, 0.17, true)])
+	await frames(1.5, func(_k): return [hand(Vector2(vp.x * 0.15, vp.y * 0.5), 0.0, 1, 0.17, true)])
 	await frames(1.0, idle)
 	dyaw = main.player.rotation.y - yaw0
-	check(dyaw > 0.2, "wiggling the left thumb turns left (%.2f rad)" % dyaw)
+	check(dyaw > 0.2, "a thumbs-up on the left turns left, whichever hand (%.2f rad)" % dyaw)
 
 	# a thumbs-up hand never grabs buildings
 	tg = await reach_target(true)
