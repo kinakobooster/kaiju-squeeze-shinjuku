@@ -1,0 +1,5 @@
+.godot/
+build/
+tools/data/
+.claude/
+.DS_Store
