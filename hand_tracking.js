@@ -37,7 +37,13 @@ async function main() {
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+      // a smaller image at a higher frame rate: fast hand moves matter more than detail
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 360 },
+        frameRate: { ideal: 60, min: 30 },
+        facingMode: "user",
+      },
       audio: false,
     });
   } catch (e) {
@@ -85,43 +91,56 @@ async function main() {
     .then((f) => (face = f))
     .catch(() => {});
 
-  let lastTime = -1;
   let frame = 0;
-  const loop = () => {
-    if (video.readyState >= 2 && video.currentTime !== lastTime) {
-      lastTime = video.currentTime;
-      const r = landmarker.detectForVideo(video, performance.now());
-      const labels = r.handedness || r.handednesses || [];
-      const hands = [];
-      for (let i = 0; i < r.landmarks.length; i++) {
-        const p = [];
-        for (const l of r.landmarks[i]) p.push(+l.x.toFixed(4), +l.y.toFixed(4), +l.z.toFixed(4));
-        const h = labels[i] && labels[i][0];
-        hands.push({ p, label: h ? h.categoryName : "", score: h ? h.score : 0 });
-      }
-      window.kaijuHands = JSON.stringify({ t: performance.now(), hands });
-      // faces change slowly; every other frame is plenty
-      if (face && frame++ % 2 === 0) {
-        const fr = face.detectForVideo(video, performance.now());
-        if (fr.faceLandmarks.length > 0) {
-          const shapes = {};
-          for (const c of fr.faceBlendshapes[0].categories) shapes[c.categoryName] = c.score;
-          const nose = fr.faceLandmarks[0][1];
-          window.kaijuFace = JSON.stringify({
-            t: performance.now(),
-            jaw: +(shapes.jawOpen || 0).toFixed(3),
-            smile: +(((shapes.mouthSmileLeft || 0) + (shapes.mouthSmileRight || 0)) / 2).toFixed(3),
-            x: +nose.x.toFixed(4),
-            y: +nose.y.toFixed(4),
-          });
-        } else {
-          window.kaijuFace = "";
-        }
+  const detect = () => {
+    const now = performance.now();
+    const r = landmarker.detectForVideo(video, now);
+    const labels = r.handedness || r.handednesses || [];
+    const hands = [];
+    for (let i = 0; i < r.landmarks.length; i++) {
+      const p = [];
+      for (const l of r.landmarks[i]) p.push(+l.x.toFixed(4), +l.y.toFixed(4), +l.z.toFixed(4));
+      const h = labels[i] && labels[i][0];
+      hands.push({ p, label: h ? h.categoryName : "", score: h ? h.score : 0 });
+    }
+    window.kaijuHands = JSON.stringify({ t: now, hands });
+    // faces change slowly; every third frame leaves more time for the hands
+    if (face && frame++ % 3 === 0) {
+      const fr = face.detectForVideo(video, now);
+      if (fr.faceLandmarks.length > 0) {
+        const shapes = {};
+        for (const c of fr.faceBlendshapes[0].categories) shapes[c.categoryName] = c.score;
+        const nose = fr.faceLandmarks[0][1];
+        window.kaijuFace = JSON.stringify({
+          t: now,
+          jaw: +(shapes.jawOpen || 0).toFixed(3),
+          smile: +(((shapes.mouthSmileLeft || 0) + (shapes.mouthSmileRight || 0)) / 2).toFixed(3),
+          x: +nose.x.toFixed(4),
+          y: +nose.y.toFixed(4),
+        });
+      } else {
+        window.kaijuFace = "";
       }
     }
-    requestAnimationFrame(loop);
   };
-  loop();
+  // run once per new camera frame (not per screen refresh) when the browser can tell us
+  if ("requestVideoFrameCallback" in video) {
+    const onFrame = () => {
+      detect();
+      video.requestVideoFrameCallback(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+  } else {
+    let lastTime = -1;
+    const loop = () => {
+      if (video.readyState >= 2 && video.currentTime !== lastTime) {
+        lastTime = video.currentTime;
+        detect();
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  }
 }
 
 main();
