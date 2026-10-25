@@ -4,6 +4,7 @@ global uniform vec4 kaiju_body;  // x, z, claw length factor, size (eye height)
 global uniform vec4 kaiju_hand_l;  // x, z, size (0 = hidden), openness
 global uniform vec4 kaiju_hand_r;
 global uniform float kaiju_yaw;
+global uniform vec4 kaiju_reach;  // x, z, radius, visibility (shown while reaching)
 
 float ks_capsule(vec2 p, vec2 a, vec2 b, float r) {
 	vec2 pa = p - a, ba = b - a;
@@ -66,5 +67,20 @@ float kaiju_shadow(vec3 world) {
 	}
 	return sh;
 }
+
+// 0..1: a soft dashed ring on the ground and roofs at arm's reach
+float kaiju_reach_ring(vec3 world) {
+	if (kaiju_reach.w < 0.01) {
+		return 0.0;
+	}
+	vec2 d = world.xz - kaiju_reach.xy;
+	float r = length(d);
+	float width = max(0.8, kaiju_reach.z * 0.025);
+	float band = 1.0 - smoothstep(0.0, width, abs(r - kaiju_reach.z));
+	float dash = step(0.0, sin(atan(d.y, d.x) * 48.0));
+	return band * dash * kaiju_reach.w;
+}
+
+const vec3 KAIJU_REACH_COLOR = vec3(1.0, 0.92, 0.98);
 
 const vec3 KAIJU_SHADOW_TINT = vec3(0.68, 0.56, 0.86);

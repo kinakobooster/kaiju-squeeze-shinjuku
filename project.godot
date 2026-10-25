@@ -45,6 +45,10 @@ kaiju_hand_r={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 1)
 }
+kaiju_reach={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
 kaiju_yaw={
 "type": "float",
 "value": 0.0

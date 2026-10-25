@@ -146,7 +146,7 @@ func crush_limit() -> float:
 
 
 func reach(mult := 1.0) -> float:
-	return (8.0 + eye * 0.25) * mult
+	return (16.0 + eye * 0.5) * mult
 
 
 ## Size of a hand's shadow (palm to fingertips is about 0.9 of this).
@@ -191,9 +191,9 @@ func _setup_world() -> void:
 	sun.light_energy = 0.75
 	add_child(sun)
 	add_child(player)
-	# start in Kabukicho among small buildings, facing west towards the Nishi-Shinjuku towers
-	player.position = Vector3(352, 0, -484)
-	player.rotation.y = PI * 0.5
+	# start on the north edge of Shinjuku Gyoen, right next to a block of small buildings
+	player.position = Vector3(762, 0, 148)
+	player.rotation.y = 0.07  # facing north into the block, the station off to the left
 	cam.rotation_degrees.x = CAM_PITCH
 	cam.fov = 75.0
 	cam.far = 3000.0
@@ -968,6 +968,8 @@ func _update_shadows_and_beads(dt: float) -> void:
 	var fwd := -player.global_basis.z
 	rs.global_shader_parameter_set(&"kaiju_body", Vector4(player.position.x - fwd.x * eye * 0.35,
 			player.position.z - fwd.z * eye * 0.35, 2.5 if active_item == "claw" else 1.0, eye))
+	rs.global_shader_parameter_set(&"kaiju_reach",
+			Vector4(player.position.x, player.position.z, reach(), look_down))
 	for side in [-1, 1]:
 		var h: HandInput.Hand = input.hands.get(side)
 		var param := &"kaiju_hand_r" if side > 0 else &"kaiju_hand_l"
@@ -1019,7 +1021,7 @@ func _update_camera(dt: float) -> void:
 	var fighting := boss != null and game_state != "play"
 	look_down = lerpf(look_down, 1.0 if reaching and not fighting else 0.0, 1.0 - exp(-2.5 * dt))
 	cam.position = Vector3(randf_range(-s, s), eye + randf_range(-s, s), eye * 0.3 * look_down)
-	var want := lerpf(CAM_PITCH, -40.0, look_down)
+	var want := lerpf(CAM_PITCH, -35.0, look_down)
 	if boss != null and game_state != "play":  # look the alien in the chest
 		var flat := Vector2(boss.position.x - player.position.x, boss.position.z - player.position.z).length()
 		want = clampf(rad_to_deg(atan2(boss.chest().y - eye, maxf(flat, 1.0))), CAM_PITCH, 42.0)
@@ -1500,15 +1502,35 @@ func _draw_ui() -> void:
 		var r := h.size * HandSilhouette.draw_scale(h, ui.size.y) * 0.7
 		var t: int = c["target"]
 		var ok := t >= 0 and _crushable(t)
-		var col := Color(1.0, 0.75, 0.25) if ok else (Color(0.6, 0.55, 0.7, 0.8) if t >= 0 else Color(0.35, 0.1, 0.5, 0.7))
-		ui.draw_arc(h.palm, r, 0, TAU, 48, col, 4.0, true)
-		if t >= 0:
-			var b: Dictionary = city.buildings[t]
-			var bname: String = b["name"] if b["name"] != "" else "ビル"
-			var text := "%s %dm%s" % [bname, int(b["h"]), "" if ok else "（かたい！）"]
-			var pos := h.palm + Vector2(r + 10, 0)
-			ui.draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 8, Color(0.15, 0.02, 0.2, 0.85))
-			ui.draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, col)
+		var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.015)
+		ui.draw_arc(h.palm, r, 0, TAU, 48, Color(1.0, 1.0, 1.0, 0.5), 3.0, true)
+		if t < 0:
+			# nothing within reach: show where the hand would land
+			var w: Vector3 = c.get("world", Vector3.ZERO)
+			if not cam.is_position_behind(w):
+				var at := cam.unproject_position(w)
+				ui.draw_dashed_line(h.palm, at, Color(1, 1, 1, 0.5), 2.0, 10.0)
+				ui.draw_arc(at, 14.0, 0, TAU, 24, Color(1, 1, 1, 0.7), 3.0, true)
+			continue
+		# a big target marker on the building itself, joined to the palm
+		var b: Dictionary = city.buildings[t]
+		var top := Vector3(b["center"].x, city.effective_height(t) * 0.75, b["center"].y)
+		if cam.is_position_behind(top):
+			continue
+		var at := cam.unproject_position(top)
+		var col := Color(1.0, 0.2, 0.3) if ok else Color(0.55, 0.5, 0.65)
+		var rr := 34.0 + pulse * 8.0
+		ui.draw_dashed_line(h.palm, at, Color(col, 0.8), 3.0, 12.0)
+		ui.draw_arc(at, rr, 0, TAU, 40, col, 5.0, true)
+		for k in 4:
+			var dir := Vector2.from_angle(TAU * k / 4.0 + PI / 4.0)
+			ui.draw_line(at + dir * (rr - 12.0), at + dir * (rr + 14.0), col, 5.0, true)
+		ui.draw_circle(at, 6.0, col)
+		var bname: String = b["name"] if b["name"] != "" else "ビル"
+		var text := ("にぎれ！ %s %dm" if ok else "かたい！ %s %dm") % [bname, int(b["h"])]
+		var pos := at + Vector2(rr + 12, 8)
+		ui.draw_string_outline(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, 8, Color(0.25, 0.02, 0.15, 0.9))
+		ui.draw_string(font_big, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1.0, 0.92, 0.95) if ok else col)
 	var ha: HandInput.Hand = input.hands.get(-1)
 	var hb: HandInput.Hand = input.hands.get(1)
 	if ha != null and hb != null and press_target >= 0:

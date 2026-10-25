@@ -67,6 +67,22 @@ func settle() -> void:
 		await process_frame
 
 
+## Like find_target, but walks forward (thumbs-up pumping) until something is in reach.
+func reach_target(crushable: bool) -> Dictionary:
+	var vp := root.get_visible_rect().size
+	for attempt in 8:
+		await settle()
+		var tg := find_target(crushable)
+		if not tg.is_empty():
+			return tg
+		await frames(0.8, func(k):
+			var y := 0.5 + 0.18 * sin(k * TAU * 2.0)
+			return [hand(Vector2(vp.x * 0.3, vp.y * y), 0.0, -1, 0.17, true),
+					hand(Vector2(vp.x * 0.7, vp.y * y), 0.0, 1, 0.17, true)])
+		await frames(0.6, func(_k): return [])
+	return {}
+
+
 ## A building we can see and pick at its middle; crushable or not.
 func find_target(crushable: bool) -> Dictionary:
 	var vp := root.get_visible_rect().size
@@ -95,8 +111,7 @@ func _run() -> void:
 	await frames(0.5, idle)
 
 	# --- fast fist = サクッ
-	await settle()
-	var tg := find_target(true)
+	var tg := await reach_target(true)
 	check(not tg.is_empty(), "found a crushable target")
 	var pos: Vector2 = tg.get("pos", Vector2.ZERO)
 	var before: int = main.score_count
@@ -110,8 +125,7 @@ func _run() -> void:
 	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
 
 	# --- slow fist = グジュウ, and the building deforms on the way
-	await settle()
-	tg = find_target(true)
+	tg = await reach_target(true)
 	pos = tg.get("pos", Vector2.ZERO)
 	before = main.score_count
 	await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
@@ -125,8 +139,7 @@ func _run() -> void:
 	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
 
 	# --- slap towards the screen
-	await settle()
-	tg = find_target(true)
+	tg = await reach_target(true)
 	pos = tg.get("pos", Vector2.ZERO)
 	before = main.score_count
 	await frames(0.5, func(_k): return [hand(pos, 1.0, 1)])
@@ -137,8 +150,7 @@ func _run() -> void:
 	await frames(0.6, func(_k): return [hand(pos, 1.0, 1)])
 
 	# --- two-finger pinch
-	await settle()
-	tg = find_target(true)
+	tg = await reach_target(true)
 	pos = tg.get("pos", Vector2.ZERO)
 	before = main.score_count
 	await frames(0.8, func(_k): return [hand(pos, 1.0, 1)])
@@ -150,10 +162,9 @@ func _run() -> void:
 
 	# --- once big, one slap flattens a whole patch of small buildings
 	main.eye_target = 120.0
-	await settle()
-	var vp0 := root.get_visible_rect().size
+	var big := await reach_target(true)
 	before = main.score_count
-	var spot := Vector2(vp0.x * 0.5, vp0.y * 0.6)
+	var spot: Vector2 = big.get("pos", root.get_visible_rect().size * 0.5)
 	await frames(0.5, func(_k): return [hand(spot, 1.0, 1)])
 	await frames(0.15, func(k): return [hand(spot, 1.0, 1, 0.17 + 0.15 * k)])
 	await frames(0.3, func(_k): return [hand(spot, 1.0, 1, 0.32)])
@@ -226,8 +237,7 @@ func _run() -> void:
 	check(dyaw > 0.2, "wiggling the left thumb turns left (%.2f rad)" % dyaw)
 
 	# a thumbs-up hand never grabs buildings
-	await settle()
-	tg = find_target(true)
+	tg = await reach_target(true)
 	if not tg.is_empty():
 		before = main.score_count
 		await frames(1.0, func(_k): return [hand(tg["pos"], 0.0, 1, 0.17, true)])
@@ -261,8 +271,7 @@ func _run() -> void:
 		frozen1 += 1 if b.get("frozen", false) else 0
 	check(frozen1 > frozen0, "smiling freezes buildings (%d frozen)" % (frozen1 - frozen0))
 	# squeeze a frozen one: シャリシャリ
-	await settle()
-	var ice := find_target(true)
+	var ice := await reach_target(true)
 	if ice.is_empty():
 		print("SKIP  no building within reach to freeze")
 	else:
