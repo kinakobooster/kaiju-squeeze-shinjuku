@@ -58,6 +58,8 @@ func start_game() -> void:
 	root.add_child(main)
 	while not main.ready_to_play:
 		await process_frame
+	main.game_state = "play"
+	main.title_label.visible = false
 	main.boss_timer = 0.3
 	while main.boss == null or main.boss_landing:
 		await step([])
@@ -106,10 +108,16 @@ func _run() -> void:
 	check(main.boss.stunned, "alien is stunned at 0 hp")
 	await frames(1.5, func(_k): return [])
 	chest = main.cam.unproject_position(main.boss.chest())
-	await frames(0.5, func(_k): return [hand(chest, 1.0, 1)])
-	await frames(1.2, func(k): return [hand(main.cam.unproject_position(main.boss.chest()) if main.boss else chest, 1.0 - k, 1)])
-	await frames(0.3, func(_k): return [hand(chest, 0.0, 1)])
-	check(main.game_state == "won", "crushing the stunned alien wins (state %s)" % main.game_state)
+	var squeezes := 0
+	while main.game_state != "won" and squeezes < 10:
+		squeezes += 1
+		if main.boss:
+			chest = main.cam.unproject_position(main.boss.chest())
+		await frames(0.5, func(_k): return [hand(chest, 1.0, 1)])
+		await frames(0.6, func(k): return [hand(chest, 1.0 - k, 1)])
+		if squeezes == 1:
+			check(main.game_state != "won" and main.boss_crush > 0.1, "one squeeze only crushes it part way (%.2f)" % main.boss_crush)
+	check(main.game_state == "won", "squeezing again and again crushes it (%d squeezes)" % squeezes)
 
 	# losing
 	await start_game()

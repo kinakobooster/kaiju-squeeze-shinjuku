@@ -135,7 +135,7 @@ func _read_camera(dt: float, size: Vector2, raw: String) -> void:
 		for fi in FINGERS:
 			var ratio := p3[0].distance_to(p3[fi[2]]) / maxf(p3[0].distance_to(p3[fi[0]]), 1e-4)
 			o += clampf((ratio - 1.15) / 0.6, 0.0, 1.0)
-		_update_hand(f["side"], f["pts"], o / 4.0, cam_dt, size, 0.6)
+		_update_hand(f["side"], f["pts"], o / 4.0, cam_dt, size, 0.75)
 		seen_sides[f["side"]] = true
 	for side in hands.keys():
 		if not seen_sides.has(side):

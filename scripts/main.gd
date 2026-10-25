@@ -34,6 +34,8 @@ const ITEMS := {
 			"how": "口を大きく開けるとビーム！ 顔を動かして振り回せ"},
 	"claw": {"name": "クロー", "color": Color(0.8, 0.95, 1.0), "time": 20.0,
 			"how": "爪がのびた！ 腕を振るとリーチ1.5倍"},
+	"midas": {"name": "ミダス", "color": Color(1.0, 0.8, 0.15), "time": 15.0,
+			"how": "いいね移動が超高速！ ぶつかったビルは ぜんぶ金になる"},
 	"smile": {"name": "スマイル", "color": Color(1.0, 0.88, 0.25), "time": 15.0,
 			"how": "笑顔で 真ん中のビルが凍りつく！ 握るとしゃりしゃり"},
 }
@@ -80,7 +82,11 @@ var stomp_cool := 0.0
 # boss fight
 var boss: Boss
 var boss_timer := BOSS_TIME
-var game_state := "play"  # play, boss, won, lost
+var game_state := "title"  # title, play, boss, won, lost
+var start_pos := Vector3.ZERO
+var title_label: Label
+var boss_crush := 0.0  # how far the knocked-out alien has been squeezed (0..1)
+var gyuu_cool := 0.0
 var boss_landing := false
 var hit_flash := 0.0
 var guard_flash := 0.0
@@ -324,12 +330,21 @@ func _setup_ui() -> void:
 	loading.text = "新宿を読み込み中…"
 	end_label = _label(top, 44, Vector2.ZERO)
 	end_label.add_theme_font_override("font", font_big)
-	end_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	end_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	end_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	end_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	end_label.add_theme_color_override("font_outline_color", Color(0.35, 0.05, 0.45))
 	end_label.add_theme_constant_override("outline_size", 18)
 	end_label.visible = false
+	title_label = _label(top, 46, Vector2.ZERO)
+	title_label.add_theme_font_override("font", font_big)
+	title_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.35))
+	title_label.add_theme_color_override("font_outline_color", Color(0.35, 0.05, 0.45))
+	title_label.add_theme_constant_override("outline_size", 18)
+	title_label.text = "かいじゅう スクイーズ 新宿\n\n両手で いいね して\n上下に振って 前進で スタート！"
 
 
 func _label(parent: Node, size: int, pos: Vector2) -> Label:
@@ -492,7 +507,7 @@ func _update_hands(dt: float) -> void:
 		# what the hand's shadow is on: this is what the hand acts on
 		var tg := _hand_target(h)
 		c["world"] = tg["world"]
-		if h.like:
+		if h.like or game_state == "title":  # before the start, hands only walk
 			c["state"] = State.MOVE
 			c["target"] = -1
 			c["still"] = 0.0
@@ -529,7 +544,7 @@ func _update_hands(dt: float) -> void:
 				if spd > 1.7:
 					c["state"] = State.MOVE
 					c["still"] = 0.0
-				elif h.others_open > 0.6 and c["pinch0"] > PINCH_OPEN and h.pinch < PINCH_OPEN - 0.05:
+				elif h.others_open > 0.8 and c["pinch0"] > PINCH_OPEN and h.pinch < PINCH_OPEN - 0.15:
 					# thumb and index closing while the other fingers stay up = pinch
 					if t >= 0 and _crushable(t):
 						c["state"] = State.PINCH
@@ -618,19 +633,30 @@ func _update_movement(dt: float) -> void:
 		if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): tr = 1.0
 		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): tr = -1.0
 		yaw_acc += tr * 4.0
-	speed = clampf(speed + fwd_acc * dt, -MAX_SPEED * 0.5 * k, MAX_SPEED * k)
+	var midas := active_item == "midas"
+	if midas:
+		fwd_acc *= 2.5
+	var top_speed := MAX_SPEED * k * (2.5 if midas else 1.0)
+	speed = clampf(speed + fwd_acc * dt, -top_speed * 0.5, top_speed)
 	yaw_vel += yaw_acc * dt
 	speed *= exp(-1.6 * dt)
 	yaw_vel *= exp(-4.0 * dt)
 	player.rotation.y += yaw_vel * dt
 	var forward := -player.global_basis.z
 	var p := player.position + forward * speed * dt
-	var p2 := city.push_out(Vector2(p.x, p.z), eye * 0.75, eye * 0.2)
+	var here := Vector2(player.position.x, player.position.z)
+	var p2 := Vector2(p.x, p.z)
+	if midas:  # nothing stops us: whatever we run into turns to gold
+		var hit := city.buildings_in_capsule(here, p2, eye * 0.3)
+		if not hit.is_empty():
+			_gild(hit)
+	else:
+		p2 = city.push_out(p2, eye * 0.75, eye * 0.2)
 	p2.x = clampf(p2.x, AREA_LIMIT.position.x, AREA_LIMIT.end.x)
 	p2.y = clampf(p2.y, AREA_LIMIT.position.y, AREA_LIMIT.end.y)
 	stomp_cool = maxf(stomp_cool - dt, 0.0)
-	if absf(speed) > 3.0 and stomp_cool <= 0.0:
-		_stomp(Vector2(player.position.x, player.position.z), p2)
+	if absf(speed) > 3.0 and stomp_cool <= 0.0 and not midas:
+		_stomp(here, p2)
 	player.position = Vector3(p2.x, 0.0, p2.y)
 
 
@@ -816,7 +842,7 @@ func _crush(id: int, at: Vector3, style: String) -> void:
 
 
 ## The empty lot fills with silver beads that rattle when you run a hand through them.
-func _spawn_beads(b: Dictionary) -> void:
+func _spawn_beads(b: Dictionary, tint := Color(0.92, 0.94, 1.0)) -> void:
 	var poly: PackedVector2Array = b["poly"]
 	var rect: Rect2 = b["rect"]
 	var center: Vector2 = b["center"]
@@ -829,11 +855,11 @@ func _spawn_beads(b: Dictionary) -> void:
 	sphere.radial_segments = 10
 	sphere.rings = 5
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.92, 0.94, 1.0)
+	m.albedo_color = tint
 	m.metallic = 0.8
 	m.roughness = 0.1
 	m.emission_enabled = true
-	m.emission = Color(0.6, 0.62, 0.7)
+	m.emission = tint * 0.65
 	sphere.material = m
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -988,7 +1014,6 @@ func _update_shadows_and_beads(dt: float) -> void:
 				site["cool"] = 0.28
 				site["bounce"] = 1.0
 				sfx.play_beads(clampf(h.vel.length() / 2.0, 0.0, 1.0))
-				popups.append({"text": "ざらざら！", "pos": h.palm + Vector2(randf_range(-30, 30), -h.size), "t": 0.0})
 	for site in bead_sites:
 		site["cool"] = maxf(site["cool"] - dt, 0.0)
 		site["bounce"] = maxf(site["bounce"] - dt * 3.0, 0.0)
@@ -1043,6 +1068,16 @@ func _update_boss(dt: float) -> void:
 	hit_flash = maxf(hit_flash - dt * 2.0, 0.0)
 	guard_flash = maxf(guard_flash - dt * 3.0, 0.0)
 	match game_state:
+		"title":
+			title_label.modulate.a = 0.75 + 0.25 * sin(Time.get_ticks_msec() * 0.005)
+			if start_pos == Vector3.ZERO:
+				start_pos = player.position
+			if player.position.distance_to(start_pos) > 12.0:
+				game_state = "play"
+				title_label.visible = false
+				banner.text = "スタート！"
+				banner_time = 2.0
+				sfx.play_star_pop()
 		"play":
 			boss_timer -= dt
 			if boss_timer <= 0.0:
@@ -1204,10 +1239,18 @@ func _crush_boss(dt: float) -> void:
 		if grab_ready[side]:
 			best = maxf(best, clampf((GRIP_OPEN - h.openness) / (GRIP_OPEN - FIST_OPEN), 0.0, 1.0))
 			closing = maxf(closing, h.close_speed / (GRIP_OPEN - FIST_OPEN))
-	boss.squash = best if best > boss.squash else lerpf(boss.squash, best, 1.0 - exp(-2.0 * dt))
-	sfx.update_squeeze(dt, best > 0.02, maxf(closing, 0.0), best, 0.5)
-	shake = maxf(shake, best * 0.4)
-	if boss.squash >= 0.97:
+	# every squeeze pushes it a bit further; it never springs all the way back
+	closing = maxf(closing, 0.0)
+	boss_crush = minf(boss_crush + closing * dt * 0.3, 1.0)
+	boss.squash = clampf(boss_crush + best * 0.12, 0.0, 1.0)
+	gyuu_cool = maxf(gyuu_cool - dt, 0.0)
+	if closing > 0.4 and gyuu_cool <= 0.0:  # ぎゅう〜
+		sfx.play(sfx.squish_long, randf_range(0.5, 0.6), 3.0)
+		sfx.play(sfx.bottle, 0.55, -2.0)
+		gyuu_cool = 1.1
+	sfx.update_squeeze(dt, best > 0.02, closing, boss_crush, 0.45)
+	shake = maxf(shake, best * 0.4 + closing * 0.1)
+	if boss_crush >= 1.0:
 		_win()
 
 
@@ -1273,6 +1316,37 @@ func _stomp(a: Vector2, b: Vector2) -> void:
 			"pos": Vector2(vp.x * 0.5 - 60, vp.y * 0.85), "t": 0.0})
 
 
+func _gild(ids: Array[int]) -> void:
+	if ids.has(active_id):
+		_end_squeeze()
+	for i in ids.size():
+		var b: Dictionary = city.buildings[ids[i]]
+		relaxing.erase(ids[i])
+		_spawn_beads(b, Color(1.0, 0.8, 0.25))
+		eye_target = minf(eye_target + (0.6 + b["h"] * 0.045) * 0.5, EYE_MAX)
+		if i < 4:
+			var one: CPUParticles3D = debris_fx.duplicate()
+			add_child(one)
+			one.global_position = Vector3(b["center"].x, b["h"] * 0.5, b["center"].y)
+			one.emission_sphere_radius = b["radius"] * 0.7
+			one.one_shot = true
+			one.explosiveness = 1.0
+			one.initial_velocity_max = 100.0
+			one.color = Color(1.0, 0.82, 0.25)
+			var psz := clampf(b["radius"] / 45.0, 0.08, 0.7)
+			one.scale_amount_min = 0.5 * psz
+			one.scale_amount_max = 1.4 * psz
+			one.emitting = true
+			get_tree().create_timer(3.0).timeout.connect(one.queue_free)
+	city.destroy_many(ids)
+	score_count += ids.size()
+	sfx.play_coin()
+	sfx.play(sfx.thud, randf_range(0.9, 1.1), -6.0)
+	var vp := get_viewport().get_visible_rect().size
+	popups.append({"text": "キンキラ！" if ids.size() == 1 else "キンキラ！ x%d" % ids.size(),
+			"pos": Vector2(vp.x * 0.5 - 80, vp.y * 0.45), "t": 0.0})
+
+
 func _setup_beam() -> void:
 	beam_mesh = MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -1294,7 +1368,7 @@ func _setup_beam() -> void:
 
 
 func _update_items(dt: float) -> void:
-	if game_state == "won" or game_state == "lost":
+	if game_state != "play" and game_state != "boss":
 		sfx.set_beam(false, 0.0)
 		beam_mesh.visible = false
 		return
@@ -1462,10 +1536,25 @@ func _star_burst(id: int) -> void:
 	get_tree().create_timer(2.5).timeout.connect(stars_fx.queue_free)
 	relaxing.erase(id)
 	beam_heat.erase(id)
+	for fx in [juice_fx, debris_fx]:  # plus a burst of juice and confetti
+		var one: CPUParticles3D = fx.duplicate()
+		add_child(one)
+		one.global_position = stars_fx.global_position
+		one.emission_sphere_radius = b["radius"] * 0.7
+		one.one_shot = true
+		one.explosiveness = 1.0
+		one.initial_velocity_max = 120.0
+		one.color = b["juice"] if fx == juice_fx else b["color"]
+		var psz := clampf(b["radius"] / 45.0, 0.08, 0.7)
+		one.scale_amount_min = 0.5 * psz
+		one.scale_amount_max = 1.4 * psz
+		one.emitting = true
+		get_tree().create_timer(3.0).timeout.connect(one.queue_free)
 	city.destroy(id)
 	score_count += 1
 	eye_target = minf(eye_target + (0.6 + b["h"] * 0.045) * 0.5, EYE_MAX)
-	sfx.play_star_pop()
+	sfx.play_beam_blast(_size_pitch(b))
+	shake = maxf(shake, 0.5)
 	popups.append({"text": "キラーン！", "pos": cam.unproject_position(stars_fx.global_position), "t": 0.0})
 
 

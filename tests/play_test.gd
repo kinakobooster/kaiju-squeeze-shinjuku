@@ -109,6 +109,14 @@ func _run() -> void:
 		await process_frame
 	var idle := func(_k): return []
 	await frames(0.5, idle)
+	check(main.game_state == "title" and main.title_label.visible, "starts on the title screen")
+	var vp_t := root.get_visible_rect().size
+	await frames(3.0, func(k):
+		var y := 0.5 + 0.18 * sin(k * TAU * 5.0)
+		return [hand(Vector2(vp_t.x * 0.3, vp_t.y * y), 0.0, -1, 0.17, true),
+				hand(Vector2(vp_t.x * 0.7, vp_t.y * y), 0.0, 1, 0.17, true)])
+	check(main.game_state == "play", "walking with both thumbs up starts the game")
+	await frames(1.0, idle)
 
 	# --- fast fist = サクッ
 	var tg := await reach_target(true)
@@ -184,8 +192,8 @@ func _run() -> void:
 		if site["center"].distance_to(Vector2(main.player.position.x, main.player.position.z)) > main.reach():
 			continue
 		await frames(0.8, func(k): return [hand(sp + Vector2(sin(k * TAU * 3.0) * 60.0, 0.0), 1.0, 1)])
-		for pop in main.popups:
-			zara = zara or pop["text"] == "ざらざら！"
+		for s2 in main.bead_sites:
+			zara = zara or s2["cool"] > 0.0
 		if zara:
 			break
 	check(zara, "stroking a bead pile goes ざらざら")
@@ -294,6 +302,14 @@ func _run() -> void:
 	await frames(0.3, idle)
 	check(not main.beam_mesh.visible, "closing the mouth stops the beam")
 
+	main.active_item = "midas"
+	main.active_time = 10.0
+	main.speed = 0.0
+	before = main.score_count
+	var p_m: Vector3 = main.player.position
+	await frames(2.5, func(k): return [pump.call(k, 0.3, -1), pump.call(k, 0.7, 1)])
+	check(main.player.position.distance_to(p_m) > 60.0 and main.score_count > before,
+			"midas: fast walking turns everything it hits to gold (%.0fm, %d)" % [main.player.position.distance_to(p_m), main.score_count - before])
 	main.active_item = "claw"
 	main.active_time = 10.0
 	await frames(0.2, func(_k): return [hand(mid, 1.0, 1)])

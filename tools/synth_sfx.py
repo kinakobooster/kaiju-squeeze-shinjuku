@@ -305,6 +305,19 @@ def make_freeze(sec=0.7):
     return normalize(x, 0.7)
 
 
+def make_coin(sec=0.6):
+    """'チャリーン': a building turning to gold. Two bright metallic strikes."""
+    n = int(SR * sec)
+    x = np.zeros(n)
+    for i, f in enumerate((rng.uniform(1900, 2300), rng.uniform(2600, 3100))):
+        start = int(i * 0.07 * SR)
+        t = t_of(sec)
+        b = (np.sin(2 * np.pi * f * t) + 0.6 * np.sin(2 * np.pi * f * 2.42 * t)
+             + 0.3 * np.sin(2 * np.pi * f * 3.95 * t)) * np.exp(-t * 7)
+        x[start:] += b[: n - start] * (1.0 if i else 0.8)
+    return normalize(x, 0.8)
+
+
 def make_thud(sec=0.6):
     """Giant palm slapping the ground while crawling."""
     t = t_of(sec)
@@ -354,6 +367,8 @@ def main():
     save("shari_loop", make_shari_loop())
     save("ice_burst", make_ice_burst())
     save("freeze", make_freeze())
+    for i in range(3):
+        save(f"coin{i}", make_coin())
     save("select", make_select())
     save("ambience", make_ambience())
 

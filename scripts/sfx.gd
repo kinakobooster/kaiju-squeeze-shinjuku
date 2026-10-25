@@ -23,6 +23,7 @@ var _loop_vol := 0.0
 var squish_shorts: Array[AudioStream] = [
 	preload("res://audio/samples/slime_squish.mp3"), preload("res://audio/samples/squish_short.mp3")]
 var squish_long: AudioStream = preload("res://audio/samples/squish_long.mp3")
+var bottle: AudioStream = preload("res://audio/samples/plastic_bottle.mp3")  # one-shot copy
 var layers: Array[AudioStreamPlayer] = []
 # items
 var beam_player: AudioStreamPlayer
@@ -30,6 +31,7 @@ var shari_player: AudioStreamPlayer
 var star_pops: Array[AudioStream] = []
 var ice_burst: AudioStream = preload("res://audio/ice_burst.wav")
 var freeze: AudioStream = preload("res://audio/freeze.wav")
+var coins: Array[AudioStream] = []
 var frozen := false  # the building being squeezed is frozen: sparkly shari-shari instead of squish
 
 
@@ -48,6 +50,7 @@ func _ready() -> void:
 	shari_player = _make_loop(preload("res://audio/shari_loop.wav"))
 	for i in 3:
 		star_pops.append(load("res://audio/star_pop%d.wav" % i))
+		coins.append(load("res://audio/coin%d.wav" % i))
 	for path in ["res://audio/samples/plastic_bottle.mp3", "res://audio/samples/squeeze_long.mp3"]:
 		var mp3: AudioStreamMP3 = load(path).duplicate()
 		mp3.loop = true
@@ -174,6 +177,18 @@ func play_ice_burst() -> void:
 
 func play_star_pop() -> void:
 	play(star_pops.pick_random(), randf_range(0.9, 1.2), -1.0)
+
+
+## A building hit by the beam: a big crunch, a wet burst and a cascade of sparkles.
+func play_beam_blast(size_pitch: float) -> void:
+	play(snaps.pick_random(), randf_range(0.8, 1.0) * size_pitch, 2.0)
+	play(burst, randf_range(1.1, 1.3) * size_pitch, -2.0)
+	play(star_pops.pick_random(), randf_range(0.9, 1.1), 0.0)
+	play(star_pops.pick_random(), randf_range(1.3, 1.6), -3.0)
+
+
+func play_coin() -> void:
+	play(coins.pick_random(), randf_range(0.9, 1.15), -1.0)
 
 
 func set_beam(on: bool, power: float) -> void:

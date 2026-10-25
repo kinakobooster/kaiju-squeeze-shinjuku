@@ -16,6 +16,11 @@ float ks_capsule(vec2 p, vec2 a, vec2 b, float r) {
 float ks_body(vec2 p) {
 	float d = length((p - vec2(0.0, 0.35)) / vec2(0.42, 0.6)) - 1.0;
 	d = min(d, length(p - vec2(0.0, 1.15)) - 0.27);  // head (in front)
+	// horns: two curving out of the head, pointing forward
+	d = min(d, ks_capsule(p, vec2(-0.13, 1.25), vec2(-0.27, 1.5), 0.045));
+	d = min(d, ks_capsule(p, vec2(-0.27, 1.5), vec2(-0.24, 1.66), 0.022));
+	d = min(d, ks_capsule(p, vec2(0.13, 1.25), vec2(0.27, 1.5), 0.045));
+	d = min(d, ks_capsule(p, vec2(0.27, 1.5), vec2(0.24, 1.66), 0.022));
 	d = min(d, ks_capsule(p, vec2(0.0, -0.2), vec2(0.15, -0.75), 0.1));  // tail
 	d = min(d, ks_capsule(p, vec2(-0.35, 0.5), vec2(-0.55, 0.85), 0.09));  // arms
 	d = min(d, ks_capsule(p, vec2(0.35, 0.5), vec2(0.55, 0.85), 0.09));
