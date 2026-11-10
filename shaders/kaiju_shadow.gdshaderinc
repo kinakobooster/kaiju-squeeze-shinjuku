@@ -4,7 +4,6 @@ global uniform vec4 kaiju_body;  // x, z, claw length factor, size (eye height)
 global uniform vec4 kaiju_hand_l;  // x, z, size (0 = hidden), openness
 global uniform vec4 kaiju_hand_r;
 global uniform float kaiju_yaw;
-global uniform vec4 kaiju_reach;  // x, z, radius, visibility (shown while reaching)
 
 float ks_capsule(vec2 p, vec2 a, vec2 b, float r) {
 	vec2 pa = p - a, ba = b - a;
@@ -71,18 +70,6 @@ float kaiju_shadow(vec3 world) {
 		sh = max(sh, 1.0 - smoothstep(-0.03, 0.03, dh));
 	}
 	return sh;
-}
-
-// Inside arm's reach stays colourful; outside fades to monochrome while we reach.
-vec3 kaiju_reach_tint(vec3 world, vec3 col) {
-	if (kaiju_reach.w < 0.01) {
-		return col;
-	}
-	float r = length(world.xz - kaiju_reach.xy);
-	float soft = max(1.5, kaiju_reach.z * 0.06);
-	float outside = smoothstep(kaiju_reach.z - soft, kaiju_reach.z + soft, r) * kaiju_reach.w;
-	float grey = dot(col, vec3(0.299, 0.587, 0.114));
-	return mix(col, vec3(grey) * 0.9, outside * 0.92);
 }
 
 const vec3 KAIJU_SHADOW_TINT = vec3(0.68, 0.56, 0.86);

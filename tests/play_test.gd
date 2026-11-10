@@ -74,6 +74,14 @@ func teleport_to_town() -> void:
 	main.player.rotation.y = PI * 0.5
 
 
+## Everything in view is in reach, so the earlier tests clear whole blocks around town.
+## Checks that need untouched buildings go to the dense blocks south-west of the station.
+func teleport_fresh(z := 800.0) -> void:
+	main.speed = 0.0
+	main.player.position = Vector3(-375, 0, z)
+	main.player.rotation.y = 0.0  # facing north
+
+
 ## Like find_target, but walks forward (thumbs-up pumping) until something is in reach.
 func reach_target(crushable: bool) -> Dictionary:
 	var vp := root.get_visible_rect().size
@@ -90,21 +98,26 @@ func reach_target(crushable: bool) -> Dictionary:
 	return {}
 
 
-## A building we can see and pick at its middle; crushable or not.
+## What a screen point hits (through the same lens as the hands).
+func ray(s: Vector2) -> Dictionary:
+	return main.city.pick(main._ray_origin(s), main._ray_normal(s), main.eye * 3.0 + main.reach())
+
+
+## A building we can see and pick at its middle; crushable or not (never the goal).
 func find_target(crushable: bool) -> Dictionary:
 	var vp := root.get_visible_rect().size
 	var best := {}
 	for id in main.city.buildings.size():
 		var b: Dictionary = main.city.buildings[id]
-		if not b["alive"] or main._crushable(id) != crushable:
+		if not b["alive"] or id == main.goal_id or main._crushable(id) != crushable:
 			continue
 		var w := Vector3(b["center"].x, b["h"] * 0.5, b["center"].y)
 		if main.cam.is_position_behind(w):
 			continue
-		var s: Vector2 = main.cam.unproject_position(w)
+		var s: Vector2 = main._to_screen(w)
 		if s.x < vp.x * 0.25 or s.x > vp.x * 0.75 or s.y < vp.y * 0.25 or s.y > vp.y * 0.8:
 			continue
-		var hit: Dictionary = main._ray(s)
+		var hit: Dictionary = ray(s)
 		if hit.get("id", -1) == id:
 			return {"id": id, "pos": s}
 	return best
@@ -188,6 +201,7 @@ func _run() -> void:
 
 	# --- once big, one slap flattens a whole patch of small buildings
 	main.eye_target = 120.0
+	teleport_fresh()
 	var big := await reach_target(true)
 	before = main.score_count
 	var spot: Vector2 = big.get("pos", root.get_visible_rect().size * 0.5)
@@ -204,8 +218,8 @@ func _run() -> void:
 		var w := Vector3(site["center"].x, 1.0, site["center"].y)
 		if main.cam.is_position_behind(w):
 			continue
-		var sp: Vector2 = main.cam.unproject_position(w)
-		if not root.get_visible_rect().has_point(sp) or not main._ray(sp).is_empty():
+		var sp: Vector2 = main._to_screen(w)
+		if not root.get_visible_rect().has_point(sp) or not ray(sp).is_empty():
 			continue  # off screen or hidden behind a building
 		if site["center"].distance_to(Vector2(main.player.position.x, main.player.position.z)) > main.reach():
 			continue
@@ -320,7 +334,7 @@ func _run() -> void:
 
 	main.active_item = "beam"
 	main.active_time = 10.0
-	teleport_to_town()
+	teleport_fresh(1000.0)
 	await settle()
 	before = main.score_count
 	main.input.injected_face = JSON.stringify({"t": 1, "jaw": 0.9, "smile": 0.0, "x": 0.5, "y": 0.62})
@@ -353,6 +367,40 @@ func _run() -> void:
 	before = main.score_count
 	await frames(3.0, func(k): return [pump.call(k, 0.3, -1), pump.call(k, 0.7, 1)])
 	check(main.score_count > before, "a big kaiju stomps small buildings just by walking (%d)" % (main.score_count - before))
+
+	# --- the goal: the tallest building in Shinjuku
+	var gb: Dictionary = main.city.buildings[main.goal_id]
+	var tallest := 0.0
+	for b in main.city.buildings:
+		tallest = maxf(tallest, b["h"])
+	check(gb["h"] == tallest and main.goal_marker != null, "the goal is the tallest building (%s %dm)" % [gb["name"], int(gb["h"])])
+	check(main.hud.text.contains("目標"), "the HUD names the goal")
+	main.eye_target = gb["h"] - 20.0
+	main.eye = main.eye_target
+	check(not main._crushable(main.goal_id), "the goal cannot be squeezed while we are smaller than it")
+	main.eye_target = gb["h"] + 15.0
+	main.eye = main.eye_target
+	check(main._crushable(main.goal_id), "taller than the goal, it can be squeezed")
+	var goal_spot := Vector2.ZERO
+	for dist in [420.0, 520.0, 320.0, 650.0]:
+		main.speed = 0.0
+		main.player.position = Vector3(gb["center"].x + dist, 0.0, gb["center"].y)
+		main.player.rotation.y = PI * 0.5  # facing west, at the tower
+		await settle()
+		var gw := Vector3(gb["center"].x, gb["h"] * 0.7, gb["center"].y)
+		var gs: Vector2 = main._to_screen(gw)
+		if root.get_visible_rect().has_point(gs) and ray(gs).get("id", -1) == main.goal_id:
+			goal_spot = gs
+			break
+	check(goal_spot != Vector2.ZERO, "the goal is in view from up close")
+	if goal_spot != Vector2.ZERO:
+		await frames(0.8, func(_k): return [hand(goal_spot, 1.0, 1)])
+		await frames(0.1, func(k): return [hand(goal_spot, 1.0 - k, 1)])
+		await frames(0.4, func(_k): return [hand(goal_spot, 0.0, 1)])
+		check(not gb["alive"] and main.game_state == "won", "squeezing the goal wins (state %s)" % main.game_state)
+		check(main.splats.size() >= 5, "the screen is splattered with building juice (%d blobs)" % main.splats.size())
+		await frames(2.0, idle)
+		check(main.end_label.visible and main.end_label.text.contains("いちばん でかいビル"), "the ending is shown")
 
 	print("DONE  failures=%d" % failures)
 	quit(1 if failures > 0 else 0)

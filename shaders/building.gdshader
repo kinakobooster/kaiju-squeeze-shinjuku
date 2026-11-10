@@ -105,7 +105,7 @@ void fragment() {
 	col = mix(col, juice_color, j);
 	emit += juice_color * j * 0.5;
 	float sh = kaiju_shadow(v_world);
-	ALBEDO = kaiju_reach_tint(v_world, mix(col, col * KAIJU_SHADOW_TINT, sh));
-	EMISSION = kaiju_reach_tint(v_world, emit * (1.0 - sh * 0.6));
+	ALBEDO = mix(col, col * KAIJU_SHADOW_TINT, sh);
+	EMISSION = emit * (1.0 - sh * 0.6);
 	ROUGHNESS = 0.85;
 }
