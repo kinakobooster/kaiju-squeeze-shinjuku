@@ -21,6 +21,8 @@ const JUICES: Array[Color] = [
 
 ## Each: {name, h, poly: PackedVector2Array, center: Vector2, radius, area, rect: Rect2,
 ##        chunk: Vector2i, color, juice, alive, damage}
+const CRUSH_RATIO := 1.6  # a kaiju can squeeze buildings up to its height times this
+
 var buildings: Array[Dictionary] = []
 var _mesh_cache: Array = []  # per building: [verts, normals, uv, uv2, colors]
 var _chunk_members := {}  # Vector2i -> Array[int]
@@ -105,7 +107,9 @@ func _build_arrays(id: int, info: Dictionary, origin: Vector2, rows: int, max_se
 	var uv := PackedVector2Array()
 	var uv2 := PackedVector2Array()
 	var c := PackedColorArray()
-	var wall_uv2 := Vector2(id, 0.0)
+	# UV2.y: the kaiju height needed to squeeze this building (negative on the roof)
+	var need: float = info.get("need", h / CRUSH_RATIO)
+	var wall_uv2 := Vector2(id, need)
 	var along := 0.0
 	for i in poly.size():
 		var a := poly[i] - origin
@@ -139,7 +143,7 @@ func _build_arrays(id: int, info: Dictionary, origin: Vector2, rows: int, max_se
 	for p in poly:
 		local.append(p - origin)
 	var tris := Geometry2D.triangulate_polygon(local)
-	var roof_uv2 := Vector2(id, 1.0)
+	var roof_uv2 := Vector2(id, -need)
 	for k in tris.size():
 		var p := local[tris[k]]
 		v.append(Vector3(p.x, h, p.y))
@@ -286,6 +290,13 @@ func pick(origin: Vector3, dir: Vector3, max_dist: float) -> Dictionary:
 					return {"id": id, "point": p}
 		t += step
 	return {}
+
+
+## A building that needs its own kaiju height before it can be squeezed (the goal).
+func set_need(id: int, need: float) -> void:
+	buildings[id]["need"] = need
+	_mesh_cache[id] = _build_arrays(id, buildings[id], Vector2.ZERO, 1, 1e9)
+	_rebuild_chunk(buildings[id]["chunk"])
 
 
 func effective_height(id: int) -> float:

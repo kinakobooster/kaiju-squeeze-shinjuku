@@ -14,8 +14,8 @@ enum State { MOVE, AIM, GRIP, PINCH }
 
 const EYE_START := 30.0
 const EYE_MAX := 300.0  # room to outgrow the tallest tower
-const GROW_K := 0.75  # how much each crushed building makes us grow
-const CRUSH_RATIO := 1.6  # can crush buildings up to eye height * this
+const GROW_K := 0.075  # how much each crushed building makes us grow (fistfuls add up)
+const CRUSH_RATIO := City.CRUSH_RATIO  # can crush buildings up to eye height * this
 const WALK_K := 130.0  # forward push per unit of thumbs-up pumping (long strides)
 const TURN_K := 4.0  # turn rate with the thumbs all the way to one side
 const STEER_DEAD := 0.25  # thumbs within this of the middle walk straight
@@ -46,6 +46,7 @@ const ITEMS := {
 			"how": "笑顔で 真ん中のビルが凍りつく！ 握るとしゃりしゃり"},
 }
 const SPLAT_LIFE := 4.0  # seconds building juice stays on the screen
+const SPLAT_CLEAR := 0.62  # juice keeps out of this much of the middle of the screen (0..1 of half the view)
 
 var city: City
 var input: HandInput
@@ -318,7 +319,7 @@ func _setup_ui() -> void:
 			+ "[マウス] 左長押し=握る  Space=素早く握る  Q=つまむ  右=叩く  T=いいね  B=口を開ける  F=笑顔  WASD=移動  H=ヘルプ")
 	banner = _label(top, 54, Vector2.ZERO)
 	banner.add_theme_font_override("font", font_big)
-	banner.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	banner.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)  # full width, so the text is centred
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	banner.offset_top = 110
 	banner.add_theme_color_override("font_color", Color(1.0, 0.88, 0.3))
@@ -326,7 +327,7 @@ func _setup_ui() -> void:
 	banner.add_theme_constant_override("outline_size", 18)
 	banner.modulate.a = 0.0
 	hint = _label(top, 24, Vector2.ZERO)
-	hint.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.offset_top = -200
 	hint.offset_bottom = -160
@@ -477,7 +478,7 @@ func _update_stars(dt: float) -> void:
 func _crushable(id: int) -> bool:
 	if id == goal_id:  # the goal: only once we are taller than it
 		return eye > city.buildings[id]["h"]
-	return city.effective_height(id) <= crush_limit()
+	return city.buildings[id]["h"] <= crush_limit()  # the same rule the shader colours by
 
 
 func _too_hard(id: int) -> void:
@@ -1197,6 +1198,7 @@ func _setup_goal() -> void:
 		if goal_id < 0 or city.buildings[id]["h"] > city.buildings[goal_id]["h"]:
 			goal_id = id
 	var b: Dictionary = city.buildings[goal_id]
+	city.set_need(goal_id, b["h"])  # stays monochrome until we are taller than it
 	goal_marker = Node3D.new()
 	goal_marker.position = Vector3(b["center"].x, b["h"], b["center"].y)
 	add_child(goal_marker)
@@ -1271,7 +1273,7 @@ func _update_goal_marker() -> void:
 
 ## Off screen, an arrow at the edge of the view points the way to the goal.
 func _draw_goal_pointer() -> void:
-	if goal_id < 0 or not city.buildings[goal_id]["alive"] or game_state == "won":
+	if goal_id < 0 or not city.buildings[goal_id]["alive"] or game_state != "play":
 		return
 	var b: Dictionary = city.buildings[goal_id]
 	var w := Vector3(b["center"].x, b["h"] * 0.6, b["center"].y)
@@ -1354,13 +1356,19 @@ func _splash(b: Dictionary, power: float) -> void:
 	for i in count:
 		var pos := from.lerp(Vector2(randf() * vp.x, randf() * vp.y), randf_range(0.3, 1.0))
 		var r := vp.y * randf_range(0.03, 0.09) * clampf(0.7 + power * 0.25, 0.7, 1.8)
+		# the middle of the screen stays clear: blobs land around the rim
+		var q := (pos - vp * 0.5) / (vp * 0.5)
+		if q.length() < SPLAT_CLEAR:
+			q = (q.normalized() if q.length() > 0.01 else Vector2.from_angle(randf() * TAU)) * randf_range(SPLAT_CLEAR, 1.0)
+			pos = vp * 0.5 + q * vp * 0.5
+		var drip_max := 4.5 if absf(q.x) > SPLAT_CLEAR or q.y > 0.0 else 0.8  # nothing runs down into the middle
 		var drops: Array[Vector3] = []  # x, y offset and radius of the little droplets around a blob
 		for k in randi_range(3, 7):
 			var off := Vector2.from_angle(randf() * TAU) * r * randf_range(1.1, 2.2)
 			drops.append(Vector3(off.x, off.y, r * randf_range(0.1, 0.3)))
 		var tint := col.lerp(Color.WHITE, randf_range(0.0, 0.15))
 		splats.append({"pos": pos, "r": r, "col": tint, "t": -randf_range(0.0, 0.35), "drops": drops,
-				"drip": r * randf_range(1.0, 4.5)})
+				"drip": r * randf_range(0.5, drip_max)})
 	if splats.size() > 120:
 		splats = splats.slice(splats.size() - 120)
 	for i in mini(count, 6):

@@ -337,7 +337,12 @@ func _run() -> void:
 	teleport_fresh(1000.0)
 	await settle()
 	before = main.score_count
-	main.input.injected_face = JSON.stringify({"t": 1, "jaw": 0.9, "smile": 0.0, "x": 0.5, "y": 0.62})
+	# look straight at a building: the beam swings 2.2x as far as the head moves
+	var bt := await reach_target(true)
+	var vp_b := root.get_visible_rect().size
+	var look: Vector2 = vp_b * 0.5 + (bt.get("pos", vp_b * Vector2(0.5, 0.62)) - vp_b * 0.5) / 2.2
+	before = main.score_count
+	main.input.injected_face = JSON.stringify({"t": 1, "jaw": 0.9, "smile": 0.0, "x": look.x / vp_b.x, "y": look.y / vp_b.y})
 	await frames(2.0, idle)
 	check(main.beam_mesh.visible and main.score_count > before, "open mouth fires the beam and buildings pop into stars (%d)" % (main.score_count - before))
 	main.input.injected_face = ""
@@ -378,6 +383,7 @@ func _run() -> void:
 	main.eye_target = gb["h"] - 20.0
 	main.eye = main.eye_target
 	check(not main._crushable(main.goal_id), "the goal cannot be squeezed while we are smaller than it")
+	check(main.city.buildings[main.goal_id]["need"] == gb["h"], "the goal stays monochrome until we outgrow it")
 	main.eye_target = gb["h"] + 15.0
 	main.eye = main.eye_target
 	check(main._crushable(main.goal_id), "taller than the goal, it can be squeezed")
@@ -399,6 +405,11 @@ func _run() -> void:
 		await frames(0.4, func(_k): return [hand(goal_spot, 0.0, 1)])
 		check(not gb["alive"] and main.game_state == "won", "squeezing the goal wins (state %s)" % main.game_state)
 		check(main.splats.size() >= 5, "the screen is splattered with building juice (%d blobs)" % main.splats.size())
+		var vp_s := root.get_visible_rect().size
+		var clear := true
+		for sp in main.splats:
+			clear = clear and ((sp["pos"] - vp_s * 0.5) / (vp_s * 0.5)).length() >= main.SPLAT_CLEAR - 0.01
+		check(clear, "no juice lands in the middle of the screen")
 		await frames(2.0, idle)
 		check(main.end_label.visible and main.end_label.text.contains("いちばん でかいビル"), "the ending is shown")
 

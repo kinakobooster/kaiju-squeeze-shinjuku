@@ -4,7 +4,8 @@ render_mode cull_disabled;
 #include "res://shaders/kaiju_shadow.gdshaderinc"
 
 // UV  = (distance along the facade [m], height [m]) for windows.
-// UV2 = (building id, roof flag).  COLOR.rgb = facade colour.
+// UV2 = (building id, kaiju height needed to squeeze it; negative on the roof).
+// COLOR.rgb = facade colour. Buildings we are too small to squeeze are drawn in monochrome.
 
 // Hover highlight (chunk meshes): building ids to glow.
 uniform float hl_list[32];
@@ -24,6 +25,7 @@ uniform vec3 juice_color : source_color = vec3(0.95, 0.35, 0.1);
 
 varying float v_seed;
 varying float v_roof;
+varying float v_locked;
 varying vec2 v_wall;
 varying float v_band;
 varying vec3 v_world;
@@ -35,7 +37,8 @@ float hash(vec2 p) {
 
 void vertex() {
 	v_seed = UV2.x;
-	v_roof = UV2.y;
+	v_roof = UV2.y < 0.0 ? 1.0 : 0.0;
+	v_locked = abs(UV2.y) > kaiju_body.w ? 1.0 : 0.0;
 	v_wall = UV;
 	float hy = clamp(VERTEX.y / bheight, 0.0, 1.0);
 	float band = exp(-pow((hy - grip_y) / 0.28, 2.0));
@@ -104,6 +107,9 @@ void fragment() {
 	float j = clamp(juice * v_band, 0.0, 0.85);
 	col = mix(col, juice_color, j);
 	emit += juice_color * j * 0.5;
+	// too big for us yet: monochrome (what we can squeeze stays in colour)
+	col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))) * 0.82, v_locked * 0.95);
+	emit = mix(emit, vec3(dot(emit, vec3(0.299, 0.587, 0.114))) * 0.5, v_locked * 0.95);
 	float sh = kaiju_shadow(v_world);
 	ALBEDO = mix(col, col * KAIJU_SHADOW_TINT, sh);
 	EMISSION = emit * (1.0 - sh * 0.6);
