@@ -431,7 +431,7 @@ func _process(dt: float) -> void:
 	if hint_time > 0.0:
 		hint_time -= dt
 		hint.modulate.a = clampf(hint_time * 2.0, 0.0, 1.0)
-	hud.text = "身長 %dm  ／  つぶせる高さ %dm まで  ／  スクイーズ %d棟" % [int(eye), int(crush_limit()), score_count]
+	hud.text = "身長 %dm（自分より低いビルを握れる）  ／  スクイーズ %d棟" % [int(eye), score_count]
 	if game_state == "play":
 		hud.text += "\n" + _goal_text()
 	silhouette.claw_scale = 3.0 if active_item == "claw" else 1.0
@@ -491,7 +491,7 @@ func _too_hard(id: int) -> void:
 		hint_time = 2.5
 		return
 	hint.text = "かたい！ %dmのビルには あと%dm 大きくならないと…" % [
-		int(b["h"]), int(ceil(city.effective_height(id) / CRUSH_RATIO - eye))]
+		int(b["h"]), int(ceil(b["h"] / CRUSH_RATIO - eye))]
 	hint_time = 2.0
 
 

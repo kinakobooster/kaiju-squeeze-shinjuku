@@ -21,7 +21,7 @@ const JUICES: Array[Color] = [
 
 ## Each: {name, h, poly: PackedVector2Array, center: Vector2, radius, area, rect: Rect2,
 ##        chunk: Vector2i, color, juice, alive, damage}
-const CRUSH_RATIO := 1.6  # a kaiju can squeeze buildings up to its height times this
+const CRUSH_RATIO := 1.0  # a kaiju can squeeze buildings up to its own height
 
 var buildings: Array[Dictionary] = []
 var _mesh_cache: Array = []  # per building: [verts, normals, uv, uv2, colors]

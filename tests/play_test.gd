@@ -85,7 +85,7 @@ func teleport_fresh(z := 800.0) -> void:
 ## Like find_target, but walks forward (thumbs-up pumping) until something is in reach.
 func reach_target(crushable: bool) -> Dictionary:
 	var vp := root.get_visible_rect().size
-	for attempt in 8:
+	for attempt in 16:
 		await settle()
 		var tg := find_target(crushable)
 		if not tg.is_empty():
@@ -95,6 +95,8 @@ func reach_target(crushable: bool) -> Dictionary:
 			return [hand(Vector2(vp.x * 0.3, vp.y * y), 0.0, -1, 0.17, true),
 					hand(Vector2(vp.x * 0.7, vp.y * y), 0.0, 1, 0.17, true)])
 		await frames(0.6, func(_k): return [])
+		if attempt >= 1:  # nothing small enough ahead: look another way
+			main.player.rotation.y += PI * 0.25
 	return {}
 
 
@@ -136,6 +138,7 @@ func _run() -> void:
 		return [hand(Vector2(vp_t.x * 0.3, vp_t.y * y), 0.0, -1, 0.17, true),
 				hand(Vector2(vp_t.x * 0.7, vp_t.y * y), 0.0, 1, 0.17, true)])
 	check(main.game_state == "play", "walking with both thumbs up starts the game")
+	main.item_timer = 1e9  # no items until the item checks: a pickup banner would hide the crush banners
 	await frames(1.0, idle)
 
 	# --- fast fist = サクッ
